@@ -1024,14 +1024,16 @@ function buildApp() {
   roleEl.textContent = KU.role.toUpperCase();
   roleEl.className = 'role-chip role-' + KU.role;
   
-  // Apply saved collapsed state
-  if (localStorage.getItem('k_sidebar_collapsed') === null) {
-    localStorage.setItem('k_sidebar_collapsed', 'true');
-  }
-  if (localStorage.getItem('k_sidebar_collapsed') === 'true') {
+  // Apply saved collapsed state (default to open on desktop)
+  const isMobile = window.innerWidth <= 1024;
+  if (isMobile) {
     document.getElementById('sidebar').classList.add('collapsed');
   } else {
-    document.getElementById('sidebar').classList.remove('collapsed');
+    if (localStorage.getItem('k_sidebar_collapsed') === 'true') {
+      document.getElementById('sidebar').classList.add('collapsed');
+    } else {
+      document.getElementById('sidebar').classList.remove('collapsed');
+    }
   }
 
   buildSidebar();
@@ -1311,17 +1313,19 @@ function navigate(id) {
     }
   });
 
-  // Auto-hide/collapse sidebar on navigation for ALL screens/devices
+  // Auto-hide/collapse sidebar on navigation ONLY for mobile screens
   const sidebar = document.getElementById('sidebar');
   if (sidebar) {
-    sidebar.classList.add('collapsed');
-    sidebar.classList.remove('mobile-open');
-    localStorage.setItem('k_sidebar_collapsed', 'true');
-    
-    const overlay = document.getElementById('sidebar-mobile-backdrop');
-    if (overlay) {
-      overlay.style.opacity = '0';
-      setTimeout(() => { overlay.style.display = 'none'; }, 250);
+    const isMobileNav = window.innerWidth <= 1024;
+    if (isMobileNav) {
+      sidebar.classList.add('collapsed');
+      sidebar.classList.remove('mobile-open');
+
+      const overlay = document.getElementById('sidebar-mobile-backdrop');
+      if (overlay) {
+        overlay.style.opacity = '0';
+        setTimeout(() => { overlay.style.display = 'none'; }, 250);
+      }
     }
   }
 }

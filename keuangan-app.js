@@ -1043,7 +1043,7 @@ function buildSidebar() {
   function canShowItem(item, groupName) {
     if (isMisriana) {
         if (groupName === 'Transaksi') return item.id === 'dana-approval' || item.id === 'portal-aset';
-        if (groupName === 'Monitor') return item.id.startsWith('monitor-');
+        if (groupName === 'Monitor') return item.id.startsWith('monitor-') && item.id !== 'monitor-buku-besar';
         if (groupName === 'Laporan') return ['lap-dashboard', 'lap-labarugi', 'lap-neraca', 'lap-aruskas', 'lap-saldo', 'lap-analisis', 'lap-print-bundle'].includes(item.id);
         if (groupName === 'Bantuan') return item.id === 'bantuan' || item.id === 'ai-assistant';
         if (groupName === 'Komunikasi') return item.id === 'portal-komunikasi';

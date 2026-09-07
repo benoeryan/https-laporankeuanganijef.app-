@@ -27,8 +27,11 @@ let KU = null;
 var _lastProcessedChatId = null;
 
 function hasRole(minRole) {
-  if (!KU) return false;
-  return (ROLES[KU.role] || 0) >= (ROLES[minRole] || 0);
+  if (!KU || !KU.role) return false;
+  var userRole = String(KU.role).toLowerCase().trim();
+  var reqRole = String(minRole || 'viewer').toLowerCase().trim();
+  if (userRole === 'superadmin') return true;
+  return (ROLES[userRole] || 0) >= (ROLES[reqRole] || 0);
 }
 
 // ===== MENU =====
@@ -1269,12 +1272,14 @@ function navigate(id) {
     btnBack.style.display = (id === 'lap-dashboard') ? 'none' : 'inline-block';
   }
 
-  const allItems = [];
-  function collect(its) { its.forEach(i => { allItems.push(i); if (i.items) collect(i.items); }); }
-  MENU.forEach(g => collect(g.items));
-  const menuItem = allItems.find(function(i) { return i.id === id; });
-  if (!menuItem) return;
-  if (!hasRole(menuItem.minRole)) return;
+  const userRole = String(KU && KU.role || '').toLowerCase().trim();
+  if (userRole !== 'superadmin') {
+    const allItems = [];
+    function collect(its) { its.forEach(i => { allItems.push(i); if (i.items) collect(i.items); }); }
+    MENU.forEach(g => collect(g.items));
+    const menuItem = allItems.find(function(i) { return i.id === id; });
+    if (menuItem && !hasRole(menuItem.minRole)) return;
+  }
   document.querySelectorAll('.sidebar-item').forEach(function(el) { el.classList.remove('active'); });
   document.querySelectorAll('.section').forEach(function(el) { el.classList.remove('active'); });
   const navEl = document.getElementById('nav-' + id);
@@ -17141,88 +17146,97 @@ async function clearAllPortalChatMessages() {
 }
 
 async function renderPortalKomunikasi() {
-  _klset('k_last_viewed_chat', new Date().toISOString());
-  // Save/Reset unread count
-  _klset('k_unread_chat_count', 0);
-  updateChatBadgeUI();
+  try {
+    _klset('k_last_viewed_chat', new Date().toISOString());
+    // Save/Reset unread count
+    _klset('k_unread_chat_count', 0);
+    updateChatBadgeUI();
 
-  const users = await KDB.getUsers();
-  const rawMsgs = await KDB.getAll('chat_messages');
-  // Sort messages by timestamp ascending
-  const msgs = (rawMsgs || []).sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
-  _lastRenderedChatCount = msgs.length;
+    const users = (await KDB.getUsers()) || [];
+    const rawMsgs = (await KDB.getAll('chat_messages')) || [];
+    // Sort messages by timestamp ascending
+    const msgs = rawMsgs.sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
+    _lastRenderedChatCount = msgs.length;
 
-  // Render Sidebar (registered users list)
-  let usersHtml = '';
-  users.forEach(function(u) {
-    var initial = (u.nama || u.username || 'U').substring(0,2).toUpperCase();
-    var isMe = u.username === KU.username;
-    usersHtml += '<div class="chat-user-item ' + (isMe ? 'active' : '') + '">'
-      + '<div class="chat-avatar" style="background:' + getAvatarColor(u.username) + '">' + initial + '</div>'
-      + '<div>'
-      + '<div style="font-weight:600;font-size:0.85rem;color:#1e293b">' + (u.nama || u.username) + (isMe ? ' (Anda)' : '') + '</div>'
-      + '<div style="font-size:0.7rem;color:#64748b;text-transform:uppercase">' + u.role + '</div>'
-      + '</div>'
-      + '</div>';
-  });
-
-  // Render Message Bubble List
-  let msgsHtml = '';
-  if (msgs.length === 0) {
-    msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
-  } else {
-    msgs.forEach(function(m) {
-      msgsHtml += renderSingleChatMessageHtml(m);
+    // Render Sidebar (registered users list)
+    let usersHtml = '';
+    users.forEach(function(u) {
+      if (!u) return;
+      var uname = u.username || u.nama || 'User';
+      var urole = u.role || 'USER';
+      var initial = (u.nama || uname).substring(0,2).toUpperCase();
+      var isMe = KU && uname === KU.username;
+      usersHtml += '<div class="chat-user-item ' + (isMe ? 'active' : '') + '">'
+        + '<div class="chat-avatar" style="background:' + getAvatarColor(uname) + '">' + initial + '</div>'
+        + '<div>'
+        + '<div style="font-weight:600;font-size:0.85rem;color:#1e293b">' + (u.nama || uname) + (isMe ? ' (Anda)' : '') + '</div>'
+        + '<div style="font-size:0.7rem;color:#64748b;text-transform:uppercase">' + urole + '</div>'
+        + '</div>'
+        + '</div>';
     });
+
+    // Render Message Bubble List
+    let msgsHtml = '';
+    if (msgs.length === 0) {
+      msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
+    } else {
+      msgs.forEach(function(m) {
+        if (m) msgsHtml += renderSingleChatMessageHtml(m);
+      });
+    }
+
+    // Quick Action Buttons
+    const quickTemplates = [
+      "Mohon segera direview 👍",
+      "Laporan keuangan sudah beres",
+      "Ada kendala input saldo awal",
+      "Done! ✅",
+      "Siap, laksanakan!"
+    ];
+    let quickHtml = quickTemplates.map(function(t) {
+      return '<button class="btn btn-sm" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer" onclick="useQuickChatTemplate(\'' + t.replace(/'/g, "\\'") + '\')">' + t + '</button>';
+    }).join('');
+
+    var userRole = String(KU && KU.role || '').toLowerCase();
+    const clearBtn = (userRole === 'superadmin' || userRole === 'admin')
+      ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="font-size:0.75rem;padding:4px 10px;border-radius:6px;border:1px solid #f43f5e;color:#f43f5e;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px">🗑️ Bersihkan Chat</button>'
+      : '';
+
+    const html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+      + '<div class="page-title" style="margin-bottom:0">💬 Portal Komunikasi Antar User</div>'
+      + clearBtn
+      + '</div>'
+      + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">Gunakan portal ini untuk berdiskusi, memberikan instruksi, atau berkoordinasi langsung dengan tim keuangan secara real-time.</p>'
+      + '<div class="chat-container">'
+      + '  <div class="chat-sidebar">'
+      + '    <div class="chat-sidebar-header">👥 ANGGOTA AKTIF</div>'
+      + '    <div class="chat-user-list">' + usersHtml + '</div>'
+      + '  </div>'
+      + '  <div class="chat-main">'
+      + '    <div id="chat-messages-container" class="chat-msg-list">' + msgsHtml + '</div>'
+      + '    <div class="chat-quick-templates">'
+      + '      <span class="chat-quick-label">Quick Reply:</span>' + quickHtml
+      + '    </div>'
+      + '    <div class="chat-input-area">'
+      + '      <input type="file" id="chat-file-input" style="display:none" onchange="handleChatFileChange(this)">'
+      + '      <button class="btn btn-outline chat-attachment-btn" onclick="triggerChatFileUpload()" title="Unggah File">📎</button>'
+      + '      <input type="text" id="chat-input" placeholder="Tulis pesan atau tempel gambar di sini..." onkeydown="if(event.key===\'Enter\')sendPortalChatMessage()" onpaste="handleChatPaste(event)">'
+      + '      <button class="btn btn-primary chat-send-btn" onclick="sendPortalChatMessage()">Kirim 📤</button>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>';
+
+    setTimeout(function() {
+      var c = document.getElementById('chat-messages-container');
+      if (c) c.scrollTop = c.scrollHeight;
+    }, 100);
+
+    return html;
+  } catch (err) {
+    console.error('Error rendering Portal Komunikasi:', err);
+    return '<div class="alert alert-danger" style="margin:20px;padding:16px;">Gagal memuat Portal Komunikasi: ' + escapeHTML(err.message || err) + '</div>';
   }
-
-  // Quick Action Buttons
-  const quickTemplates = [
-    "Mohon segera direview 👍",
-    "Laporan keuangan sudah beres",
-    "Ada kendala input saldo awal",
-    "Done! ✅",
-    "Siap, laksanakan!"
-  ];
-  let quickHtml = quickTemplates.map(function(t) {
-    return '<button class="btn btn-sm" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer" onclick="useQuickChatTemplate(\'' + t.replace(/'/g, "\\'") + '\')">' + t + '</button>';
-  }).join('');
-
-  var userRole = String(KU && KU.role || '').toLowerCase();
-  const clearBtn = (userRole === 'superadmin' || userRole === 'admin')
-    ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="font-size:0.75rem;padding:4px 10px;border-radius:6px;border:1px solid #f43f5e;color:#f43f5e;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px">🗑️ Bersihkan Chat</button>'
-    : '';
-
-  const html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-    + '<div class="page-title" style="margin-bottom:0">💬 Portal Komunikasi Antar User</div>'
-    + clearBtn
-    + '</div>'
-    + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">Gunakan portal ini untuk berdiskusi, memberikan instruksi, atau berkoordinasi langsung dengan tim keuangan secara real-time.</p>'
-    + '<div class="chat-container">'
-    + '  <div class="chat-sidebar">'
-    + '    <div class="chat-sidebar-header">👥 ANGGOTA AKTIF</div>'
-    + '    <div class="chat-user-list">' + usersHtml + '</div>'
-    + '  </div>'
-    + '  <div class="chat-main">'
-    + '    <div id="chat-messages-container" class="chat-msg-list">' + msgsHtml + '</div>'
-    + '    <div class="chat-quick-templates">'
-    + '      <span class="chat-quick-label">Quick Reply:</span>' + quickHtml
-    + '    </div>'
-    + '    <div class="chat-input-area">'
-    + '      <input type="file" id="chat-file-input" style="display:none" onchange="handleChatFileChange(this)">'
-    + '      <button class="btn btn-outline chat-attachment-btn" onclick="triggerChatFileUpload()" title="Unggah File">📎</button>'
-    + '      <input type="text" id="chat-input" placeholder="Tulis pesan atau tempel gambar di sini..." onkeydown="if(event.key===\'Enter\')sendPortalChatMessage()" onpaste="handleChatPaste(event)">'
-    + '      <button class="btn btn-primary chat-send-btn" onclick="sendPortalChatMessage()">Kirim 📤</button>'
-    + '    </div>'
-    + '  </div>'
-    + '</div>';
-
-  setTimeout(function() {
-    var c = document.getElementById('chat-messages-container');
-    if (c) c.scrollTop = c.scrollHeight;
-  }, 100);
-
-  return html;
+}
 }
 
 function useQuickChatTemplate(text) {

@@ -639,7 +639,10 @@ textarea{resize:vertical;min-height:70px}
       </div>
       <div class="form-group">
         <label>Password</label>
-        <input type="password" id="login-pass" onkeydown="if(event.key==='Enter')doLogin()">
+        <div style="position:relative">
+          <input type="password" id="login-pass" onkeydown="if(event.key==='Enter')doLogin()" style="padding-right:38px">
+          <button type="button" onclick="togglePwd('login-pass',this)" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:1rem; color:#64748b; padding:0; display:flex; align-items:center; justify-content:center; width:24px; height:24px" title="Lihat Password">👁</button>
+        </div>
       </div>
       <button class="btn btn-primary" style="width:100%; justify-content:center; padding:12px" onclick="doLogin()">Masuk Ke Sistem</button>
       <p id="login-error" style="color:#ea4335; text-align:center; margin-top:15px; display:none; font-size:0.85rem"></p>

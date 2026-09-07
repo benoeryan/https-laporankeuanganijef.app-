@@ -804,14 +804,14 @@ async function initUsers() {
     const idx = updated.findIndex(function(u) { return u.username === su.username; });
     if (idx === -1) {
       updated.push(su);
+      _klset('ku_' + su.username, su);
     } else {
-      // Don't overwrite existing password to prevent frustrating resets
+      // Honor existing info to prevent role resets on app close/restart
+      if (!updated[idx].role) updated[idx].role = su.role;
+      if (!updated[idx].nama) updated[idx].nama = su.nama;
       if (!updated[idx].password) updated[idx].password = su.password;
-      updated[idx].role = su.role;
-      updated[idx].nama = su.nama;
-      updated[idx].email = su.email;
+      _klset('ku_' + su.username, updated[idx]);
     }
-    _klset('ku_' + su.username, su);
   });
   _klset('kusers', updated);
 
@@ -824,16 +824,9 @@ async function initUsers() {
           const docId = String(u.username).toLowerCase();
           const snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', docId));
 
-          // Force update core system user info (nama, role, email) even if exists
-          // But keep password if user already has one to avoid forced resets
-          if (snap.exists()) {
-            const current = snap.data();
-            await kfs.updateDoc(kfs.doc(kdb, 'k_users', docId), {
-              nama: u.nama,
-              role: u.role,
-              email: u.email
-            });
-          } else {
+          // Only create system users if they don't exist yet
+          // Do NOT force update role/nama/email to honor manual changes in Admin UI
+          if (!snap.exists()) {
             await kfs.setDoc(kfs.doc(kdb, 'k_users', docId), u);
           }
         } catch(e) { console.warn('Firebase user sync:', systemUsers[i].username, e.message); }
@@ -1042,11 +1035,21 @@ function buildSidebar() {
   const isNanda = (role === 'nanda');
   const isBOD = (role === 'bod');
   const isLimited = (role === 'viewer' || role === 'leader');
+  const isMisriana = (KU && (KU.username === 'anaijefcorp' || KU.email === 'anaijefcorp@gmail.com' || (KU.nama && KU.nama.toLowerCase().includes('misriana'))));
 
   let html = '';
   let groupIdx = 0;
 
   function canShowItem(item, groupName) {
+    if (isMisriana) {
+        if (groupName === 'Transaksi') return item.id === 'dana-approval' || item.id === 'portal-aset';
+        if (groupName === 'Monitor') return item.id.startsWith('monitor-');
+        if (groupName === 'Laporan') return ['lap-dashboard', 'lap-labarugi', 'lap-neraca', 'lap-aruskas', 'lap-saldo', 'lap-analisis', 'lap-print-bundle'].includes(item.id);
+        if (groupName === 'Bantuan') return item.id === 'bantuan' || item.id === 'ai-assistant';
+        if (groupName === 'Komunikasi') return item.id === 'portal-komunikasi';
+        return false;
+    }
+
     if (!hasRole(item.minRole)) return false;
     // Superadmin Power: See everything
     if (KU.role === 'superadmin') return true;

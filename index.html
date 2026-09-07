@@ -126,7 +126,7 @@ body{font-family:'Inter',sans-serif;color:#333;font-size:14px;overflow-y: auto !
   background:#f0f4f8; /* Background aplikasi */
   position: relative;
 }
-.app-header{background:var(--ijef-dark);color:white;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:2000;box-shadow:0 2px 10px rgba(0,0,0,0.45);border-bottom:2px solid var(--ijef-primary)}
+.app-header{background:var(--ijef-dark) !important;color:white !important;padding:0 20px !important;height:52px !important;box-sizing:border-box !important;display:flex !important;align-items:center !important;justify-content:space-between !important;position:fixed !important;top:0 !important;left:0 !important;right:0 !important;z-index:2000 !important;box-shadow:0 2px 10px rgba(0,0,0,0.45) !important;border-bottom:2px solid var(--ijef-primary) !important}
 .app-header h1{font-size:1.15rem;display:flex;align-items:center;gap:8px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;letter-spacing:-0.01em}
 .header-right{display:flex;align-items:center;gap:10px}
 .user-info{font-size:0.82rem;background:rgba(255,255,255,0.08);padding:5px 12px;border-radius:16px;font-weight:500;border:1px solid rgba(255,255,255,0.05)}
@@ -141,9 +141,9 @@ body{font-family:'Inter',sans-serif;color:#333;font-size:14px;overflow-y: auto !
 .btn-logout:hover{background:rgba(255,255,255,0.18)}
 
 /* SIDEBAR + CONTENT */
-.app-body{display:flex;min-height:calc(100vh - 52px);overflow:visible !important}
-.sidebar{width:220px;background:var(--ijef-sidebar);color:white;flex-shrink:0;overflow-y:auto;transition:width 0.3s;height:calc(100vh - 52px);position:sticky;top:52px;border-right:1px solid rgba(255,255,255,0.04);z-index:1000}
-.sidebar.collapsed{width:0;overflow:hidden}
+.app-body{display:flex !important;margin-top:52px !important;min-height:calc(100vh - 52px) !important}
+.sidebar{width:220px !important;background:var(--ijef-sidebar) !important;color:white !important;flex-shrink:0 !important;overflow-y:auto !important;transition:transform 0.3s ease, width 0.3s ease !important;height:calc(100vh - 52px) !important;position:fixed !important;top:52px !important;left:0 !important;border-right:1px solid rgba(255,255,255,0.04) !important;z-index:1000 !important}
+.sidebar.collapsed{transform:translateX(-220px) !important}
 .sidebar-group{padding:8px 0}
 .sidebar-group-title{font-size:0.7rem;font-weight:700;color:rgba(255,255,255,0.45);padding:8px 16px 4px;text-transform:uppercase;letter-spacing:0.75px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:color 0.2s,background 0.2s;border-radius:4px;margin:0 4px;user-select:none}
 .sidebar-group-title:hover{color:rgba(255,255,255,0.85);background:rgba(255,255,255,0.05)}
@@ -169,10 +169,16 @@ body{font-family:'Inter',sans-serif;color:#333;font-size:14px;overflow-y: auto !
 .sidebar-subgroup.expanded > .sidebar-item .sidebar-sub-arrow { transform: rotate(90deg); }
 
 .main-content {
-  flex: 1;
-  padding: 28px;
-  min-width: 0;
+  flex: 1 !important;
+  margin-left: 220px !important;
+  padding: 28px !important;
+  min-width: 0 !important;
   padding-bottom: 120px !important;
+  transition: margin-left 0.3s ease !important;
+}
+.sidebar.collapsed ~ .main-content {
+  margin-left: 0 !important;
+}
   overflow: visible !important;
 }
 .section{display:none}
@@ -542,7 +548,23 @@ textarea{resize:vertical;min-height:70px}
 .me .chat-bubble { background: #1a237e; color: white; border-bottom-right-radius: 2px; }
 .other .chat-bubble { background: #f1f5f9; color: #1e293b; border-bottom-left-radius: 2px; }
 
-.chat-meta { font-size: 0.62rem; color: #94a3b8; margin-top: 3px; font-weight: 600; }
+.chat-meta { font-size: 0.62rem; color: #94a3b8; margin-top: 3px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+.chat-delete-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0 2px;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+.chat-delete-btn:hover {
+  opacity: 1;
+  color: #ef4444;
+  transform: scale(1.15);
+}
 .chat-avatar {
   width: 32px;
   height: 32px;

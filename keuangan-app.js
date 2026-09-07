@@ -801,16 +801,25 @@ async function initUsers() {
   const local = _klget('kusers', []);
   let updated = [...local];
   systemUsers.forEach(function(su) {
-    const idx = updated.findIndex(function(u) { return u.username === su.username; });
-    if (idx === -1) {
+    const docId = String(su.username).toLowerCase().trim();
+    const savedKu = _klget('ku_' + docId, null);
+    const idx = updated.findIndex(function(u) { return String(u.username).toLowerCase().trim() === docId; });
+
+    if (savedKu) {
+      if (idx === -1) {
+        updated.push(savedKu);
+      } else {
+        updated[idx] = savedKu;
+      }
+    } else if (idx === -1) {
       updated.push(su);
-      _klset('ku_' + su.username, su);
+      _klset('ku_' + docId, su);
     } else {
       // Honor existing info to prevent role resets on app close/restart
       if (!updated[idx].role) updated[idx].role = su.role;
       if (!updated[idx].nama) updated[idx].nama = su.nama;
       if (!updated[idx].password) updated[idx].password = su.password;
-      _klset('ku_' + su.username, updated[idx]);
+      _klset('ku_' + docId, updated[idx]);
     }
   });
   _klset('kusers', updated);
@@ -821,13 +830,19 @@ async function initUsers() {
       for (var i = 0; i < systemUsers.length; i++) {
         try {
           const u = systemUsers[i];
-          const docId = String(u.username).toLowerCase();
+          const docId = String(u.username).toLowerCase().trim();
           const snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', docId));
 
           // Only create system users if they don't exist yet
-          // Do NOT force update role/nama/email to honor manual changes in Admin UI
           if (!snap.exists()) {
             await kfs.setDoc(kfs.doc(kdb, 'k_users', docId), u);
+          } else {
+            // If exists in Firebase, sync Firebase data to local storage if local doesn't have dirty edits
+            const fbData = snap.data();
+            const dirtyTime = _klget('k_users_dirty_' + docId, 0);
+            if (!dirtyTime && fbData) {
+              _klset('ku_' + docId, fbData);
+            }
           }
         } catch(e) { console.warn('Firebase user sync:', systemUsers[i].username, e.message); }
       }
@@ -838,34 +853,38 @@ async function initUsers() {
 async function findUser(username, password) {
   const qUser = String(username || '').toLowerCase().trim();
 
-  // 1. Try fallback localStorage first (fast)
+  // 1. Try individual ku_ key in localStorage first (has latest edited role/details)
+  const kuUser = _klget('ku_' + qUser, null);
+  if (kuUser && kuUser.password === password) {
+    return kuUser;
+  }
+
+  // 2. Try fallback localStorage kusers array
   const local = _klget('kusers', []);
   const foundLocal = local.find(function(u) {
-    return String(u.username || '').toLowerCase() === qUser && u.password === password;
+    return String(u.username || '').toLowerCase().trim() === qUser && u.password === password;
   });
   if (foundLocal) return foundLocal;
 
-  // 2. Try Firebase lookup (with timeout)
+  // 3. Try Firebase lookup (with timeout)
   if (kfbReady) {
     try {
-      // Prioritaskan data lokal jika baru saja diubah (dirty flag) untuk mencegah overwrite data lama dari Firebase lag
-      const dirtyTime = _klget('k_users_dirty_' + username, 0);
-      if (dirtyTime && (Date.now() - dirtyTime) < 10000) {
-        const localUser = _klget('ku_' + username, null);
-        if (localUser && localUser.password === password) return localUser;
-      }
-
       const fbPromise = (async () => {
-        // We try the exact username first
-        let snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', username));
+        let snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', qUser));
         if (!snap.exists() && username !== qUser) {
-          // If not found, try the lowercase version as ID
-          snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', qUser));
+          snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', username));
         }
 
         if (snap.exists()) {
           const u = snap.data();
-          if (u.password === password) return u;
+          if (u.password === password) {
+            _klset('ku_' + qUser, u);
+            const list = _klget('kusers', []);
+            const i = list.findIndex(x => String(x.username || '').toLowerCase().trim() === qUser);
+            if (i >= 0) list[i] = u; else list.push(u);
+            _klset('kusers', list);
+            return u;
+          }
         }
         return null;
       })();
@@ -10768,7 +10787,8 @@ async function editUser(username) {
 
 async function simpanEditUser(username) {
   const users = await KDB.getUsers();
-  const u = users.find(function(x){ return x.username === username; });
+  const targetName = String(username || '').toLowerCase().trim();
+  const u = users.find(function(x){ return String(x.username || '').toLowerCase().trim() === targetName; });
   if (!u) return;
   const newPass = document.getElementById('eu-pass').value;
   const updatedUser = Object.assign({}, u, {
@@ -10781,7 +10801,7 @@ async function simpanEditUser(username) {
   await KDB.saveUser(updatedUser);
 
   // Jika yang diedit adalah user yang sedang login, update variable KU dan session
-  if (KU && KU.username === username) {
+  if (KU && String(KU.username || '').toLowerCase().trim() === targetName) {
     KU = updatedUser;
     _klset('k_session', { username: KU.username, password: KU.password });
   }
@@ -17003,6 +17023,119 @@ if ('serviceWorker' in navigator) {
 // ── PORTAL KOMUNIKASI & COLLABORATION ──────────────────────────────────────────
 var _lastRenderedChatCount = 0;
 
+function renderSingleChatMessageHtml(m) {
+  var userRole = String(KU && KU.role || '').toLowerCase();
+  var currentU = String(KU && KU.username || '').toLowerCase();
+  var currentNama = String(KU && KU.nama || '').toLowerCase();
+  var msgSender = String(m.sender || '').toLowerCase();
+  var msgSenderName = String(m.senderName || '').toLowerCase();
+
+  var isMe = (msgSender && msgSender === currentU) || (msgSenderName && msgSenderName === currentNama);
+  var isSuperOrAdmin = userRole === 'superadmin' || userRole === 'admin';
+  var canDelete = isMe || isSuperOrAdmin;
+
+  var initial = (m.senderName || m.sender || 'U').substring(0,2).toUpperCase();
+  var timeStr = formatChatTime(m.timestamp);
+  var senderRoleLower = String(m.senderRole || '').toLowerCase();
+  var roleColor = senderRoleLower === 'superadmin' ? '#f43f5e' : senderRoleLower === 'admin' ? '#3b82f6' : '#10b981';
+
+  var attachmentHtml = '';
+  if (m.fileData) {
+    if (m.fileType && m.fileType.startsWith('image/')) {
+      attachmentHtml = '<div style="margin-top:8px"><img src="' + m.fileData + '" style="max-width:100%;max-height:300px;border-radius:8px;cursor:pointer" onclick="window.open(\'' + m.fileData + '\')"></div>';
+    } else {
+      var fileName = m.fileName || 'Lampiran';
+      attachmentHtml = '<div style="margin-top:8px"><a href="' + m.fileData + '" download="' + fileName + '" style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.05);border-radius:8px;text-decoration:none;color:inherit;font-weight:600;font-size:0.8rem">'
+        + '<span>📎</span> ' + fileName + '</a></div>';
+    }
+  }
+
+  var msgId = m.id || m._id || m.timestamp;
+
+  var deleteBtnHtml = canDelete
+    ? '<button type="button" class="chat-delete-btn" onclick="deletePortalChatMessage(\'' + msgId + '\')" title="Hapus pesan ini" style="background:#fee2e2;border:1px solid #fca5a5;color:#dc2626;cursor:pointer;font-size:0.68rem;padding:2px 6px;border-radius:4px;margin-left:8px;font-weight:600;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;line-height:1.2" onmouseover="this.style.background=\'#ef4444\';this.style.color=\'#fff\'" onmouseout="this.style.background=\'#fee2e2\';this.style.color=\'#dc2626\'">🗑️ Hapus</button>'
+    : '';
+
+  return '<div class="chat-bubble-wrap ' + (isMe ? 'me' : 'other') + '" id="chat-msg-' + msgId + '" style="margin-bottom:12px">'
+    + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:0.75rem;width:100%;' + (isMe ? 'justify-content:flex-end' : '') + '">'
+    + '<span style="font-weight:700;color:#1e293b">' + (m.senderName || m.sender) + '</span>'
+    + '<span style="background:' + roleColor + ';color:white;padding:1px 6px;border-radius:4px;font-size:0.62rem;font-weight:700;text-transform:uppercase">' + (m.senderRole || 'USER') + '</span>'
+    + deleteBtnHtml
+    + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:flex-end;' + (isMe ? 'flex-direction:row-reverse' : '') + '">'
+    + '<div class="chat-avatar" style="width:28px;height:28px;font-size:0.75rem;background:' + getAvatarColor(m.sender) + '">' + initial + '</div>'
+    + '<div class="chat-bubble">' + (m.text ? escapeHTML(m.text) : '') + attachmentHtml + '</div>'
+    + '</div>'
+    + '<div class="chat-meta" style="margin-top:3px;font-size:0.65rem;color:#94a3b8">' + timeStr + '</div>'
+    + '</div>';
+}
+
+async function deletePortalChatMessage(msgId) {
+  if (!msgId) {
+    showAlert('ID pesan tidak ditemukan.', 'danger');
+    return;
+  }
+  if (!confirm('Apakah Anda yakin ingin menghapus pesan chat ini?')) return;
+
+  showLoading(true);
+  try {
+    await KDB.delete('chat_messages', msgId);
+
+    const rawMsgs = await KDB.getAll('chat_messages');
+    for (let m of (rawMsgs || [])) {
+      if (m.id === msgId || m.timestamp === msgId) {
+        await KDB.delete('chat_messages', m.id || m.timestamp);
+      }
+    }
+
+    showAlert('Pesan chat telah dihapus.', 'success');
+    _lastRenderedChatCount = -1;
+
+    if (currentSection === 'portal-komunikasi') {
+      const msgs = await KDB.getAll('chat_messages');
+      updateChatMessageList(msgs);
+    } else if (currentSection === 'lap-dashboard') {
+      navigate('lap-dashboard');
+    }
+  } catch (e) {
+    console.error('Gagal menghapus pesan chat:', e);
+    showAlert('Gagal menghapus pesan: ' + (e.message || e), 'danger');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function clearAllPortalChatMessages() {
+  var userRole = String(KU && KU.role || '').toLowerCase();
+  if (userRole !== 'superadmin' && userRole !== 'admin') {
+    showAlert('Akses ditolak. Hanya Superadmin/Admin yang dapat menghapus seluruh chat.', 'danger');
+    return;
+  }
+  if (!confirm('⚠️ APABILA DIHAPUS, SELURUH PESAN CHAT AKAN DIHAPUS PERMANEN!\n\nApakah Anda benar-benar yakin ingin menghapus SEMUA pesan chat?')) return;
+
+  showLoading(true);
+  try {
+    const rawMsgs = await KDB.getAll('chat_messages');
+    for (let i = 0; i < (rawMsgs || []).length; i++) {
+      if (rawMsgs[i].id || rawMsgs[i].timestamp) {
+        await KDB.delete('chat_messages', rawMsgs[i].id || rawMsgs[i].timestamp);
+      }
+    }
+    showAlert('Seluruh pesan chat berhasil dibersihkan.', 'success');
+    _lastRenderedChatCount = -1;
+    if (currentSection === 'portal-komunikasi') {
+      navigate('portal-komunikasi');
+    } else if (currentSection === 'lap-dashboard') {
+      navigate('lap-dashboard');
+    }
+  } catch (e) {
+    console.error('Gagal membersihkan chat:', e);
+    showAlert('Gagal membersihkan chat: ' + (e.message || e), 'danger');
+  } finally {
+    showLoading(false);
+  }
+}
+
 async function renderPortalKomunikasi() {
   _klset('k_last_viewed_chat', new Date().toISOString());
   // Save/Reset unread count
@@ -17035,33 +17168,7 @@ async function renderPortalKomunikasi() {
     msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
   } else {
     msgs.forEach(function(m) {
-      var isMe = m.sender === KU.username;
-      var initial = (m.senderName || m.sender || 'U').substring(0,2).toUpperCase();
-      var timeStr = formatChatTime(m.timestamp);
-      var roleColor = m.senderRole === 'superadmin' ? '#f43f5e' : m.senderRole === 'admin' ? '#3b82f6' : '#10b981';
-
-      var attachmentHtml = '';
-      if (m.fileData) {
-        if (m.fileType && m.fileType.startsWith('image/')) {
-          attachmentHtml = '<div style="margin-top:8px"><img src="' + m.fileData + '" style="max-width:100%;max-height:300px;border-radius:8px;cursor:pointer" onclick="window.open(\'' + m.fileData + '\')"></div>';
-        } else {
-          var fileName = m.fileName || 'Lampiran';
-          attachmentHtml = '<div style="margin-top:8px"><a href="' + m.fileData + '" download="' + fileName + '" style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.05);border-radius:8px;text-decoration:none;color:inherit;font-weight:600;font-size:0.8rem">'
-            + '<span>📎</span> ' + fileName + '</a></div>';
-        }
-      }
-
-      msgsHtml += '<div class="chat-bubble-wrap ' + (isMe ? 'me' : 'other') + '">'
-        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;font-size:0.75rem;">'
-        + '<span style="font-weight:700;color:#1e293b">' + (m.senderName || m.sender) + '</span>'
-        + '<span style="background:' + roleColor + ';color:white;padding:1px 6px;border-radius:4px;font-size:0.62rem;font-weight:700;text-transform:uppercase">' + (m.senderRole || 'USER') + '</span>'
-        + '</div>'
-        + '<div style="display:flex;gap:8px;align-items:flex-end;' + (isMe ? 'flex-direction:row-reverse' : '') + '">'
-        + '<div class="chat-avatar" style="width:28px;height:28px;font-size:0.75rem;background:' + getAvatarColor(m.sender) + '">' + initial + '</div>'
-        + '<div class="chat-bubble">' + (m.text ? escapeHTML(m.text) : '') + attachmentHtml + '</div>'
-        + '</div>'
-        + '<div class="chat-meta">' + timeStr + '</div>'
-        + '</div>';
+      msgsHtml += renderSingleChatMessageHtml(m);
     });
   }
 
@@ -17077,8 +17184,16 @@ async function renderPortalKomunikasi() {
     return '<button class="btn btn-sm" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer" onclick="useQuickChatTemplate(\'' + t.replace(/'/g, "\\'") + '\')">' + t + '</button>';
   }).join('');
 
-  const html = '<div class="page-title">💬 Portal Komunikasi Antar User</div>'
-    + '<p class="text-muted" style="margin-top:-10px;margin-bottom:15px">Gunakan portal ini untuk berdiskusi, memberikan instruksi, atau berkoordinasi langsung dengan tim keuangan secara real-time.</p>'
+  var userRole = String(KU && KU.role || '').toLowerCase();
+  const clearBtn = (userRole === 'superadmin' || userRole === 'admin')
+    ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="font-size:0.75rem;padding:4px 10px;border-radius:6px;border:1px solid #f43f5e;color:#f43f5e;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px">🗑️ Bersihkan Chat</button>'
+    : '';
+
+  const html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    + '<div class="page-title" style="margin-bottom:0">💬 Portal Komunikasi Antar User</div>'
+    + clearBtn
+    + '</div>'
+    + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">Gunakan portal ini untuk berdiskusi, memberikan instruksi, atau berkoordinasi langsung dengan tim keuangan secara real-time.</p>'
     + '<div class="chat-container">'
     + '  <div class="chat-sidebar">'
     + '    <div class="chat-sidebar-header">👥 ANGGOTA AKTIF</div>'
@@ -17202,19 +17317,33 @@ async function renderPortalKomunikasiWidget() {
     msgsHtml = '<div style="text-align:center;color:#64748b;padding:20px 0;font-size:0.85rem">Belum ada obrolan terbaru. Mulai diskusi pertama Anda!</div>';
   } else {
     msgs.forEach(function(m) {
-      var isMe = m.sender === KU.username;
+      var userRole = String(KU && KU.role || '').toLowerCase();
+      var currentU = String(KU && KU.username || '').toLowerCase();
+      var currentNama = String(KU && KU.nama || '').toLowerCase();
+      var msgSender = String(m.sender || '').toLowerCase();
+      var msgSenderName = String(m.senderName || '').toLowerCase();
+
+      var isMe = (msgSender && msgSender === currentU) || (msgSenderName && msgSenderName === currentNama);
+      var canDelete = isMe || userRole === 'superadmin' || userRole === 'admin';
       var initial = (m.senderName || m.sender || 'U').substring(0,2).toUpperCase();
-      var roleColor = m.senderRole === 'superadmin' ? '#f43f5e' : m.senderRole === 'admin' ? '#3b82f6' : '#10b981';
+      var senderRoleLower = String(m.senderRole || '').toLowerCase();
+      var roleColor = senderRoleLower === 'superadmin' ? '#f43f5e' : senderRoleLower === 'admin' ? '#3b82f6' : '#10b981';
       var timeStr = formatChatTime(m.timestamp);
+      var msgId = m.id || m._id || m.timestamp;
 
       var attachmentText = m.fileData ? (m.fileType && m.fileType.startsWith('image/') ? ' [📷 Gambar]' : ' [📎 File]') : '';
+      var deleteBtnHtml = canDelete
+        ? '<button onclick="deletePortalChatMessage(\'' + msgId + '\')" title="Hapus pesan" style="background:#fee2e2;border:1px solid #fca5a5;color:#dc2626;cursor:pointer;font-size:0.68rem;margin-left:auto;padding:2px 6px;border-radius:4px;font-weight:600">🗑️ Hapus</button>'
+        : '';
+
       msgsHtml += '<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9">'
         + '  <div class="chat-avatar" style="width:28px;height:28px;font-size:0.7rem;background:' + getAvatarColor(m.sender) + '">' + initial + '</div>'
         + '  <div style="flex:1;min-width:0">'
         + '    <div style="display:flex;align-items:center;gap:6px;font-size:0.75rem;margin-bottom:1px">'
         + '      <span style="font-weight:700;color:#1e293b">' + (m.senderName || m.sender) + '</span>'
         + '      <span style="background:' + roleColor + ';color:white;padding:1px 4px;border-radius:3px;font-size:0.58rem;font-weight:700;text-transform:uppercase">' + (m.senderRole || 'USER') + '</span>'
-        + '      <span style="color:#94a3b8;font-size:0.65rem;margin-left:auto">' + timeStr + '</span>'
+        + '      <span style="color:#94a3b8;font-size:0.65rem;' + (canDelete ? '' : 'margin-left:auto') + '">' + timeStr + '</span>'
+        + deleteBtnHtml
         + '    </div>'
         + '    <div style="font-size:0.8rem;color:#475569;word-break:break-word">' + (m.text ? escapeHTML(m.text) : '') + '<i style="color:#94a3b8">' + attachmentText + '</i>' + '</div>'
         + '  </div>'
@@ -17490,33 +17619,7 @@ function updateChatMessageList(rawMsgs) {
     msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
   } else {
     msgs.forEach(function(m) {
-      var isMe = m.sender === KU.username;
-      var initial = (m.senderName || m.sender || 'U').substring(0,2).toUpperCase();
-      var timeStr = formatChatTime(m.timestamp);
-      var roleColor = m.senderRole === 'superadmin' ? '#f43f5e' : m.senderRole === 'admin' ? '#3b82f6' : '#10b981';
-
-      var attachmentHtml = '';
-      if (m.fileData) {
-        if (m.fileType && m.fileType.startsWith('image/')) {
-          attachmentHtml = '<div style="margin-top:8px"><img src="' + m.fileData + '" style="max-width:100%;max-height:300px;border-radius:8px;cursor:pointer" onclick="window.open(\'' + m.fileData + '\')"></div>';
-        } else {
-          var fileName = m.fileName || 'Lampiran';
-          attachmentHtml = '<div style="margin-top:8px"><a href="' + m.fileData + '" download="' + fileName + '" style="display:flex;align-items:center;gap:8px;padding:10px;background:rgba(0,0,0,0.05);border-radius:8px;text-decoration:none;color:inherit;font-weight:600;font-size:0.8rem">'
-            + '<span>📎</span> ' + fileName + '</a></div>';
-        }
-      }
-
-      msgsHtml += '<div class="chat-bubble-wrap ' + (isMe ? 'me' : 'other') + '">'
-        + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;font-size:0.75rem;">'
-        + '<span style="font-weight:700;color:#1e293b">' + (m.senderName || m.sender) + '</span>'
-        + '<span style="background:' + roleColor + ';color:white;padding:1px 6px;border-radius:4px;font-size:0.62rem;font-weight:700;text-transform:uppercase">' + (m.senderRole || 'USER') + '</span>'
-        + '</div>'
-        + '<div style="display:flex;gap:8px;align-items:flex-end;' + (isMe ? 'flex-direction:row-reverse' : '') + '">'
-        + '<div class="chat-avatar" style="width:28px;height:28px;font-size:0.75rem;background:' + getAvatarColor(m.sender) + '">' + initial + '</div>'
-        + '<div class="chat-bubble">' + (m.text ? escapeHTML(m.text) : '') + attachmentHtml + '</div>'
-        + '</div>'
-        + '<div class="chat-meta">' + timeStr + '</div>'
-        + '</div>';
+      msgsHtml += renderSingleChatMessageHtml(m);
     });
   }
 

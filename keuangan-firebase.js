@@ -76,16 +76,18 @@ const KDB = {
 
   // ---- USERS ----
   async saveUser(u) {
-    _klset('ku_' + u.username, u);
-    _klset('k_users_dirty_' + u.username, Date.now());
+    const uname = String(u.username || '').toLowerCase().trim();
+    u.username = uname;
+    _klset('ku_' + uname, u);
+    _klset('k_users_dirty_' + uname, Date.now());
     const list = _klget('kusers', []);
-    const i = list.findIndex(x => x.username === u.username);
+    const i = list.findIndex(x => String(x.username || '').toLowerCase().trim() === uname);
     if (i >= 0) list[i] = u; else list.push(u);
     _klset('kusers', list);
     if (kfbReady) {
       try {
-        await kfs.setDoc(kfs.doc(kdb, 'k_users', u.username), u);
-        localStorage.removeItem('k_users_dirty_' + u.username);
+        await kfs.setDoc(kfs.doc(kdb, 'k_users', uname), u);
+        localStorage.removeItem('k_users_dirty_' + uname);
       } catch(e) { console.warn(e); }
     }
   },
@@ -96,27 +98,31 @@ const KDB = {
         const snap = await kfs.getDocs(kfs.collection(kdb, 'k_users'));
         var users = snap.docs.map(d => d.data());
 
-        // Merge with dirty items to prevent stale overwrite
-        var now = Date.now();
-        var dirtyPrefix = 'k_users_dirty_';
-        for (var i = 0; i < localStorage.length; i++) {
-          var key = localStorage.key(i);
-          if (key && key.indexOf(dirtyPrefix) === 0) {
-            var username = key.substring(dirtyPrefix.length);
-            var dirtyTime = _klget(key, 0);
-            if (dirtyTime && (now - dirtyTime) < 10000) {
-              var localUser = _klget('ku_' + username, null);
-              if (localUser) {
-                var idx = users.findIndex(function(x){ return x.username === username; });
-                if (idx >= 0) users[idx] = localUser; else users.push(localUser);
-              }
+        // Merge with local ku_ saved users to protect edited user roles from being overwritten by old FB cache
+        var localList = _klget('kusers', []);
+        localList.forEach(function(lu) {
+          if (lu && lu.username) {
+            var uname = String(lu.username).toLowerCase().trim();
+            var kuObj = _klget('ku_' + uname, null);
+            var objToUse = kuObj || lu;
+            var idx = users.findIndex(function(x){ return String(x.username || '').toLowerCase().trim() === uname; });
+            if (idx >= 0) {
+              users[idx] = Object.assign({}, users[idx], objToUse);
             } else {
-              localStorage.removeItem(key);
+              users.push(objToUse);
             }
           }
-        }
+        });
 
-        if (users.length > 0) { _klset('kusers', users); return users; }
+        if (users.length > 0) {
+          users.forEach(function(u) {
+            if (u && u.username) {
+              _klset('ku_' + String(u.username).toLowerCase().trim(), u);
+            }
+          });
+          _klset('kusers', users);
+          return users;
+        }
       } catch(e) { console.warn(e); }
     }
     return _klget('kusers', []);

@@ -76,12 +76,14 @@ const KDB = {
 
   // ---- USERS ----
   async saveUser(u) {
+    if (!u) return;
     const uname = String(u.username || '').toLowerCase().trim();
+    if (!uname) return;
     u.username = uname;
     _klset('ku_' + uname, u);
     _klset('k_users_dirty_' + uname, Date.now());
-    const list = _klget('kusers', []);
-    const i = list.findIndex(x => String(x.username || '').toLowerCase().trim() === uname);
+    const list = _klget('kusers', []) || [];
+    const i = list.findIndex(x => x && x.username && String(x.username).toLowerCase().trim() === uname);
     if (i >= 0) list[i] = u; else list.push(u);
     _klset('kusers', list);
     if (kfbReady) {
@@ -96,16 +98,16 @@ const KDB = {
     if (kfbReady) {
       try {
         const snap = await kfs.getDocs(kfs.collection(kdb, 'k_users'));
-        var users = snap.docs.map(d => d.data());
+        var users = (snap.docs || []).map(d => d.data()).filter(Boolean);
 
         // Merge with local ku_ saved users to protect edited user roles from being overwritten by old FB cache
-        var localList = _klget('kusers', []);
+        var localList = _klget('kusers', []) || [];
         localList.forEach(function(lu) {
           if (lu && lu.username) {
             var uname = String(lu.username).toLowerCase().trim();
             var kuObj = _klget('ku_' + uname, null);
             var objToUse = kuObj || lu;
-            var idx = users.findIndex(function(x){ return String(x.username || '').toLowerCase().trim() === uname; });
+            var idx = users.findIndex(function(x){ return x && x.username && String(x.username).toLowerCase().trim() === uname; });
             if (idx >= 0) {
               users[idx] = Object.assign({}, users[idx], objToUse);
             } else {
@@ -125,7 +127,7 @@ const KDB = {
         }
       } catch(e) { console.warn(e); }
     }
-    return _klget('kusers', []);
+    return _klget('kusers', []) || [];
   },
 
   async deleteUser(username) {

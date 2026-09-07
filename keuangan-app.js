@@ -801,12 +801,13 @@ async function initUsers() {
   const systemUsers = [DEFAULT, NANDA, BOD, IRSAN, RYAN, ANA];
 
   // Update localStorage first (fast)
-  const local = _klget('kusers', []);
+  const local = _klget('kusers', []) || [];
   let updated = [...local];
   systemUsers.forEach(function(su) {
+    if (!su || !su.username) return;
     const docId = String(su.username).toLowerCase().trim();
     const savedKu = _klget('ku_' + docId, null);
-    const idx = updated.findIndex(function(u) { return String(u.username).toLowerCase().trim() === docId; });
+    const idx = updated.findIndex(function(u) { return u && u.username && String(u.username).toLowerCase().trim() === docId; });
 
     if (savedKu) {
       if (idx === -1) {
@@ -833,11 +834,12 @@ async function initUsers() {
       for (var i = 0; i < systemUsers.length; i++) {
         try {
           const u = systemUsers[i];
+          if (!u || !u.username) continue;
           const docId = String(u.username).toLowerCase().trim();
           const snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', docId));
 
           // Only create system users if they don't exist yet
-          if (!snap.exists()) {
+          if (!snap || !snap.exists()) {
             await kfs.setDoc(kfs.doc(kdb, 'k_users', docId), u);
           } else {
             // If exists in Firebase, sync Firebase data to local storage if local doesn't have dirty edits
@@ -847,7 +849,7 @@ async function initUsers() {
               _klset('ku_' + docId, fbData);
             }
           }
-        } catch(e) { console.warn('Firebase user sync:', systemUsers[i].username, e.message); }
+        } catch(e) { console.warn('Firebase user sync:', systemUsers[i] && systemUsers[i].username, e.message); }
       }
     })();
   }
@@ -855,6 +857,7 @@ async function initUsers() {
 
 async function findUser(username, password) {
   const qUser = String(username || '').toLowerCase().trim();
+  if (!qUser) return null;
 
   // 1. Try individual ku_ key in localStorage first (has latest edited role/details)
   const kuUser = _klget('ku_' + qUser, null);
@@ -863,9 +866,9 @@ async function findUser(username, password) {
   }
 
   // 2. Try fallback localStorage kusers array
-  const local = _klget('kusers', []);
+  const local = _klget('kusers', []) || [];
   const foundLocal = local.find(function(u) {
-    return String(u.username || '').toLowerCase().trim() === qUser && u.password === password;
+    return u && u.username && String(u.username).toLowerCase().trim() === qUser && u.password === password;
   });
   if (foundLocal) return foundLocal;
 
@@ -874,16 +877,16 @@ async function findUser(username, password) {
     try {
       const fbPromise = (async () => {
         let snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', qUser));
-        if (!snap.exists() && username !== qUser) {
+        if ((!snap || !snap.exists()) && username !== qUser) {
           snap = await kfs.getDoc(kfs.doc(kdb, 'k_users', username));
         }
 
-        if (snap.exists()) {
+        if (snap && snap.exists()) {
           const u = snap.data();
-          if (u.password === password) {
+          if (u && u.password === password) {
             _klset('ku_' + qUser, u);
-            const list = _klget('kusers', []);
-            const i = list.findIndex(x => String(x.username || '').toLowerCase().trim() === qUser);
+            const list = _klget('kusers', []) || [];
+            const i = list.findIndex(x => x && x.username && String(x.username).toLowerCase().trim() === qUser);
             if (i >= 0) list[i] = u; else list.push(u);
             _klset('kusers', list);
             return u;
@@ -905,36 +908,40 @@ async function findUser(username, password) {
 async function doLogin() {
   const userEl = document.getElementById('login-user');
   const passEl = document.getElementById('login-pass');
+  if (!userEl || !passEl) return;
+
   const username = userEl.value.trim();
   const password = passEl.value.trim();
   const err = document.getElementById('login-error');
 
-  err.style.display = 'none';
+  if (err) err.style.display = 'none';
   if (!username || !password) {
-    err.textContent = 'Username dan password wajib diisi!';
-    err.style.display = 'block';
+    if (err) {
+      err.textContent = 'Username dan password wajib diisi!';
+      err.style.display = 'block';
+    }
     return;
   }
 
   showLoading(true);
   try {
     const found = await findUser(username, password);
-    showLoading(false);
 
     if (!found) {
       console.warn('[Auth] Login failed for:', username);
-      err.textContent = 'Username atau password salah!';
-      err.style.display = 'block';
+      if (err) {
+        err.textContent = 'Username atau password salah!';
+        err.style.display = 'block';
 
-      // Detailed feedback
-      const qUser = String(username || '').toLowerCase().trim();
-      const local = _klget('kusers', []);
-      const userExists = local.some(function(u) { return String(u.username || '').toLowerCase() === qUser; });
+        const qUser = String(username || '').toLowerCase().trim();
+        const local = _klget('kusers', []) || [];
+        const userExists = local.some(function(u) { return u && u.username && String(u.username).toLowerCase().trim() === qUser; });
 
-      if (userExists) {
-        err.innerHTML += '<br><small style="color:#d32f2f">Username ditemukan, tapi password salah. Perhatikan huruf besar/kecil.</small>';
-      } else {
-        err.innerHTML += '<br><small style="color:#d32f2f">Username "' + qUser + '" tidak terdaftar di sistem ini.</small>';
+        if (userExists) {
+          err.innerHTML += '<br><small style="color:#d32f2f">Username ditemukan, tapi password salah. Perhatikan huruf besar/kecil.</small>';
+        } else {
+          err.innerHTML += '<br><small style="color:#d32f2f">Username "' + escapeHTML(qUser) + '" tidak terdaftar di sistem ini.</small>';
+        }
       }
       return;
     }
@@ -943,9 +950,15 @@ async function doLogin() {
     _klset('k_session', { username: found.username, password: found.password });
     buildApp();
   } catch(e) {
-    showLoading(false);
     console.error('[Auth] Login Error:', e);
-    alert('Terjadi kesalahan sistem saat login. Mohon Hard Refresh.');
+    if (err) {
+      err.textContent = 'Terjadi kesalahan sistem saat login: ' + (e.message || e);
+      err.style.display = 'block';
+    } else {
+      alert('Terjadi kesalahan sistem saat login: ' + (e.message || e));
+    }
+  } finally {
+    showLoading(false);
   }
 }
 

@@ -1092,7 +1092,8 @@ function buildApp() {
 
 function buildSidebar() {
   const sb = document.getElementById('sidebar');
-  const role = KU.role;
+  if (!sb) return;
+  const role = String(KU && KU.role || '').toLowerCase().trim();
   const isNanda = (role === 'nanda');
   const isBOD = (role === 'bod');
   const isLimited = (role === 'viewer' || role === 'leader');
@@ -1102,6 +1103,9 @@ function buildSidebar() {
   let groupIdx = 0;
 
   function canShowItem(item, groupName) {
+    if (!item) return false;
+    var userRole = String(KU && KU.role || '').toLowerCase().trim();
+
     if (isMisriana) {
         if (groupName === 'Transaksi') return item.id === 'dana-approval' || item.id === 'portal-aset';
         if (groupName === 'Monitor') return item.id.startsWith('monitor-') && item.id !== 'monitor-buku-besar';
@@ -1111,9 +1115,10 @@ function buildSidebar() {
         return false;
     }
 
-    if (!hasRole(item.minRole)) return false;
     // Superadmin Power: See everything
-    if (KU.role === 'superadmin') return true;
+    if (userRole === 'superadmin') return true;
+
+    if (!hasRole(item.minRole)) return false;
 
     if (isNanda) {
         if (groupName === 'Transaksi') return item.id === 'portal-aset';
@@ -1170,7 +1175,7 @@ function buildSidebar() {
               + (hasSub ? '<span class="sidebar-sub-arrow">&#9654;</span>' : '') + '</div>';
 
       if (hasSub) {
-        subHtml += '<div class="sidebar-submenu" ' + (childActive ? 'style="max-height:1000px"' : '') + '>';
+        subHtml += '<div class="sidebar-submenu" ' + (childActive ? 'style="max-height:2000px"' : '') + '>';
         subHtml += renderItemsRecursive(item.items, level + 1, groupName);
         subHtml += '</div>';
       }
@@ -1180,7 +1185,10 @@ function buildSidebar() {
   }
 
   MENU.forEach(function(group) {
-    const visible = group.items.filter(function(item) { return hasRole(item.minRole); });
+    const visible = group.items.filter(function(item) {
+      var userRole = String(KU && KU.role || '').toLowerCase().trim();
+      return userRole === 'superadmin' || hasRole(item.minRole);
+    });
     if (!visible.length) return;
 
     const filteredItems = visible.filter(function(item) {
@@ -1197,7 +1205,7 @@ function buildSidebar() {
     html += '<div class="sidebar-group-title" onclick="toggleSidebarGroup(this)">'
           + '<span class="sidebar-group-title-main"><span class="icon">' + group.icon + '</span><span class="sidebar-item-label">' + group.group + '</span></span>'
           + '<span class="sidebar-group-arrow">' + (groupHasActive ? '&#9660;' : '&#9654;') + '</span></div>';
-    html += '<div class="sidebar-group-items"' + (groupHasActive ? ' style="max-height:1000px"' : '') + '>';
+    html += '<div class="sidebar-group-items"' + (groupHasActive ? ' style="max-height:2000px"' : '') + '>';
     html += renderItemsRecursive(filteredItems, 0, group.group);
     html += '</div></div><div class="sidebar-divider"></div>';
     groupIdx++;
@@ -1206,8 +1214,9 @@ function buildSidebar() {
 }
 
 function toggleSidebarSubmenu(event, el) {
-  event.stopPropagation();
-  var parent = el.parentElement;
+  if (event) event.stopPropagation();
+  var parent = el.closest('.sidebar-subgroup') || el.parentElement;
+  if (!parent) return;
   var submenu = parent.querySelector('.sidebar-submenu');
   var arrow = el.querySelector('.sidebar-sub-arrow');
 
@@ -1216,22 +1225,23 @@ function toggleSidebarSubmenu(event, el) {
     if (submenu) submenu.style.maxHeight = '0';
   } else {
     parent.classList.add('expanded');
-    if (submenu) submenu.style.maxHeight = submenu.scrollHeight + 'px';
+    if (submenu) submenu.style.maxHeight = '2000px';
   }
 }
 
 function toggleSidebarGroup(titleEl) {
-  var group = titleEl.parentElement;
+  var group = titleEl.closest('.sidebar-group') || titleEl.parentElement;
+  if (!group) return;
   var items = group.querySelector('.sidebar-group-items');
   var arrow = titleEl.querySelector('.sidebar-group-arrow');
   if (group.classList.contains('expanded')) {
     group.classList.remove('expanded');
-    items.style.maxHeight = '0';
-    arrow.innerHTML = '&#9654;';
+    if (items) items.style.maxHeight = '0';
+    if (arrow) arrow.innerHTML = '&#9654;';
   } else {
     group.classList.add('expanded');
-    items.style.maxHeight = items.scrollHeight + 'px';
-    arrow.innerHTML = '&#9660;';
+    if (items) items.style.maxHeight = '2000px';
+    if (arrow) arrow.innerHTML = '&#9660;';
   }
 }
 function buildContent() {

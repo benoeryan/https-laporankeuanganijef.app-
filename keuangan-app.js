@@ -1106,6 +1106,9 @@ function buildSidebar() {
     if (!item) return false;
     var userRole = String(KU && KU.role || '').toLowerCase().trim();
 
+    // Superadmin Power: See and access EVERYTHING
+    if (userRole === 'superadmin') return true;
+
     if (isMisriana) {
         if (groupName === 'Transaksi') return item.id === 'dana-approval' || item.id === 'portal-aset';
         if (groupName === 'Monitor') return item.id.startsWith('monitor-') && item.id !== 'monitor-buku-besar';
@@ -1114,9 +1117,6 @@ function buildSidebar() {
         if (groupName === 'Komunikasi') return item.id === 'portal-komunikasi';
         return false;
     }
-
-    // Superadmin Power: See everything
-    if (userRole === 'superadmin') return true;
 
     if (!hasRole(item.minRole)) return false;
 
@@ -1334,11 +1334,11 @@ function navigate(id) {
   // Auto-expand the sidebar group containing this item
   if (navEl) {
     var parentGroup = navEl.closest('.sidebar-group');
-    if (parentGroup && !parentGroup.classList.contains('expanded')) {
+    if (parentGroup) {
+      parentGroup.classList.add('expanded');
       var items = parentGroup.querySelector('.sidebar-group-items');
       var arrow = parentGroup.querySelector('.sidebar-group-arrow');
-      parentGroup.classList.add('expanded');
-      if (items) items.style.maxHeight = items.scrollHeight + 'px';
+      if (items) items.style.maxHeight = '2000px';
       if (arrow) arrow.innerHTML = '&#9660;';
     }
   }

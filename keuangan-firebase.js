@@ -542,30 +542,41 @@ function stopRealtimeSync() {
   console.log('[KFirebase] Real-time sync stopped');
 }
 
+var _kInMemoryStorage = {};
+
 function _klget(key, def) {
   try {
-    var val = JSON.parse(localStorage.getItem(key));
-    return (val !== null && val !== undefined) ? val : def;
-  } catch(e) { return def; }
+    var item = localStorage.getItem(key);
+    if (item !== null && item !== undefined) {
+      var val = JSON.parse(item);
+      return (val !== null && val !== undefined) ? val : def;
+    }
+  } catch(e) {}
+  if (_kInMemoryStorage.hasOwnProperty(key)) {
+    var inMem = _kInMemoryStorage[key];
+    return (inMem !== null && inMem !== undefined) ? inMem : def;
+  }
+  return def;
 }
 
 function _klset(key, val) {
+  _kInMemoryStorage[key] = val; // Always update in-memory fallback first
   try {
     var str = JSON.stringify(val);
     localStorage.setItem(key, str);
   } catch(e) {
-    console.warn('[KFirebase] LocalStorage Error:', e.message);
-    if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) {
-      // Clear heavy caches and retry
-      console.warn('[KFirebase] Quota exceeded, clearing heavy caches...');
-      _kCollectLocalStorageKeys(function(k) {
-        return k.indexOf('k_') === 0 && k.indexOf('_all') > 0;
-      }).forEach(function(k) {
-        localStorage.removeItem(k);
-      });
-      try { localStorage.setItem(key, JSON.stringify(val)); } catch(e2) {
-        console.error('[KFirebase] Retry failed after clearing cache');
+    console.warn('[KFirebase] LocalStorage write warn for key (' + key + '):', e.message || e);
+    // Purge large cached items if quota exceeded
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (k && (k.indexOf('_all') > -1 || k.indexOf('dirty_') > -1 || k.indexOf('atk_log') > -1 || k.indexOf('draft') > -1)) {
+          localStorage.removeItem(k);
+        }
       }
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch(e2) {
+      // In-memory fallback is already active, app continues without throwing
     }
   }
 }

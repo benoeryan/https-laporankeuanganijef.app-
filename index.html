@@ -152,7 +152,8 @@ body{font-family:'Inter',sans-serif;color:#333;font-size:14px;overflow-y: auto !
 .sidebar-group-items{max-height:0;overflow:hidden;transition:max-height 0.3s ease}
 .sidebar-group.expanded > .sidebar-group-items { max-height: 2000px !important; }
 
-.sidebar-item{display:flex;align-items:center;gap:8px;padding:9px 16px;cursor:pointer;font-size:0.85rem;color:rgba(255,255,255,0.75);transition:background 0.15s;border-left:3px solid transparent}
+.sidebar-item{display:flex;align-items:center;gap:8px;padding:9px 16px;cursor:pointer;font-size:0.85rem;color:rgba(255,255,255,0.75);transition:background 0.15s;border-left:3px solid transparent;pointer-events:auto !important;user-select:none}
+.sidebar-item * { pointer-events: none !important; }
 .sidebar-item:hover{background:rgba(255,255,255,0.06);color:#ffffff}
 .sidebar-item.active{background:rgba(163,0,0,0.12);border-left-color:var(--ijef-primary);color:white;font-weight:600}
 .sidebar-item .icon{font-size:1rem;width:20px;text-align:center;flex-shrink:0}
@@ -721,8 +722,8 @@ textarea{resize:vertical;min-height:70px}
   </div>
 </div>
 
-<script src="keuangan-firebase.js?v=20260907-10"></script>
-<script src="keuangan-app.js?v=20260907-10"></script>
+<script src="keuangan-firebase.js?v=20260908-01"></script>
+<script src="keuangan-app.js?v=20260908-01"></script>
 <script>
 function handleResize() {
   const isPortrait = window.innerHeight > window.innerWidth;

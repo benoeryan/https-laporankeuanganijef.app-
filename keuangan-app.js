@@ -17274,7 +17274,6 @@ async function renderPortalKomunikasi() {
     return '<div class="alert alert-danger" style="margin:20px;padding:16px;">Gagal memuat Portal Komunikasi: ' + escapeHTML(err.message || err) + '</div>';
   }
 }
-}
 
 function useQuickChatTemplate(text) {
   var el = document.getElementById('chat-input');

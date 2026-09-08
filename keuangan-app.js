@@ -860,20 +860,15 @@ async function findUser(username, password) {
   const qUser = String(username || '').toLowerCase().trim();
   if (!qUser) return null;
 
-  // Emergency Hardcoded System Users Bypass (guarantees login for core accounts)
-  const hardcodedUsers = [
-    { username: 'superadmin', role: 'superadmin', nama: 'Super Admin', email: '' },
-    { username: 'nanda', role: 'nanda', nama: 'Nanda Yoga Maulana', email: '' },
-    { username: 'bod', role: 'bod', nama: 'Board of Directors', email: '' },
-    { username: 'irsan', role: 'leader', nama: 'Irsan Janwar Wibawa', email: 'irsanijefcorp@gmail.com' },
-    { username: 'ryanbenoe', role: 'superadmin', nama: 'Muhammad Agus Ryanda', email: 'benoeryan21@gmail.com' },
-    { username: 'anaijefcorp', role: 'superadmin', nama: 'Misriana', email: 'anaijefcorp@gmail.com' },
-    { username: 'hokage', role: 'admin', nama: 'Hokage', email: 'hokageijefcorp@gmail.com' }
+  const SYSTEM_USERS = [
+    { username: 'superadmin', password: 'admin2026', role: 'superadmin', nama: 'Super Admin', email: '' },
+    { username: 'nanda', password: 'nanda2026', role: 'nanda', nama: 'Nanda Yoga Maulana', email: '' },
+    { username: 'bod', password: 'bod2026', role: 'bod', nama: 'Board of Directors', email: '' },
+    { username: 'irsan', password: 'irsan2026', role: 'leader', nama: 'Irsan Janwar Wibawa', email: 'irsanijefcorp@gmail.com' },
+    { username: 'ryanbenoe', password: 'ryanbenoe21', role: 'superadmin', nama: 'Muhammad Agus Ryanda', email: 'benoeryan21@gmail.com' },
+    { username: 'anaijefcorp', password: 'ana2026', role: 'superadmin', nama: 'Misriana', email: 'anaijefcorp@gmail.com' },
+    { username: 'hokage', password: 'hokage2026', role: 'admin', nama: 'Hokage', email: 'hokageijefcorp@gmail.com' }
   ];
-  const foundHardcoded = hardcodedUsers.find(function(u) {
-    return String(u.username || '').toLowerCase() === qUser;
-  });
-  if (foundHardcoded) return foundHardcoded;
 
   // 1. Try individual ku_ key in localStorage first (has latest edited role/details)
   const kuUser = _klget('ku_' + qUser, null);
@@ -887,6 +882,19 @@ async function findUser(username, password) {
     return u && u.username && String(u.username).toLowerCase().trim() === qUser && u.password === password;
   });
   if (foundLocal) return foundLocal;
+
+  // 3. Try SYSTEM_USERS failsafe fallback (in-memory, with password verification)
+  const sysUser = SYSTEM_USERS.find(function(su) {
+    return String(su.username).toLowerCase().trim() === qUser && su.password === password;
+  });
+  if (sysUser) {
+    var finalUser = sysUser;
+    if (kuUser) {
+      finalUser = Object.assign({}, sysUser, kuUser, { password: password });
+    }
+    _klset('ku_' + qUser, finalUser);
+    return finalUser;
+  }
 
   // 3. Try Firebase lookup (with timeout)
   if (kfbReady) {

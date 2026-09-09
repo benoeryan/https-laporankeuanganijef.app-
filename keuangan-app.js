@@ -1328,7 +1328,10 @@ function navigate(id) {
     if (menuItem && !hasRole(menuItem.minRole)) return;
   }
   document.querySelectorAll('.sidebar-item').forEach(function(el) { el.classList.remove('active'); });
-  document.querySelectorAll('.section').forEach(function(el) { el.classList.remove('active'); });
+  document.querySelectorAll('.section').forEach(function(el) {
+    el.classList.remove('active');
+    el.style.display = 'none';
+  });
   const navEl = document.getElementById('nav-' + id);
   if (navEl) navEl.classList.add('active');
   // Auto-expand the sidebar group containing this item
@@ -1350,6 +1353,7 @@ function navigate(id) {
     document.getElementById('main-content').appendChild(secEl);
   }
   secEl.classList.add('active');
+  secEl.style.display = 'block';
   currentSection = id;
   renderSection(id);
   

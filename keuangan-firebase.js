@@ -187,12 +187,21 @@ const KDB = {
     }
     if (kfbReady) {
       try {
-        const snap = await kfs.getDocs(kfs.collection(kdb, 'k_' + col));
-        var items = snap.docs.map(d => {
-          const item = d.data();
-          if (!item.id) item.id = d.id;
-          return item;
-        });
+        const fbPromise = (async function() {
+          const snap = await kfs.getDocs(kfs.collection(kdb, 'k_' + col));
+          return (snap.docs || []).map(d => {
+            const item = d.data();
+            if (!item.id) item.id = d.id;
+            return item;
+          });
+        })();
+
+        const timeoutPromise = new Promise(function(resolve) { setTimeout(function(){ resolve('timeout'); }, 2500); });
+        var items = await Promise.race([fbPromise, timeoutPromise]);
+
+        if (items === 'timeout' || !Array.isArray(items)) {
+          return _klget('k_' + col + '_all', []);
+        }
 
         var now = Date.now();
         // Collect dirty IDs
@@ -277,15 +286,22 @@ const KDB = {
   async getAllIMS(col) {
     if (kfbReady) {
       try {
-        const snap = await kfs.getDocs(kfs.collection(kdb, col));
-        const items = snap.docs.map(d => {
-          const item = d.data();
-          if (!item.id) item.id = d.id;
-          return item;
-        });
-        _klset('ims_' + col + '_all', items);
-        return items;
-      } catch(e) { console.warn(e); }
+        const fbPromise = (async function() {
+          const snap = await kfs.getDocs(kfs.collection(kdb, col));
+          const items = (snap.docs || []).map(d => {
+            const item = d.data();
+            if (!item.id) item.id = d.id;
+            return item;
+          });
+          _klset('ims_' + col + '_all', items);
+          return items;
+        })();
+
+        const timeoutPromise = new Promise(function(resolve) { setTimeout(function(){ resolve('timeout'); }, 2500); });
+        const res = await Promise.race([fbPromise, timeoutPromise]);
+
+        if (res !== 'timeout' && Array.isArray(res)) return res;
+      } catch(e) { console.warn('getAllIMS error:', e.message || e); }
     }
     return _klget('ims_' + col + '_all', []);
   },

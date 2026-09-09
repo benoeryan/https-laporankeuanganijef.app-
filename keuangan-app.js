@@ -17088,6 +17088,125 @@ if ('serviceWorker' in navigator) {
 
 // ── PORTAL KOMUNIKASI & COLLABORATION ──────────────────────────────────────────
 var _lastRenderedChatCount = 0;
+var _activeChatChannel = 'global';
+
+function switchChatChannel(channelKey) {
+  _activeChatChannel = channelKey || 'global';
+  _lastRenderedChatCount = -1;
+  if (currentSection === 'portal-komunikasi') {
+    renderSection('portal-komunikasi');
+  }
+}
+
+async function openBuatGrupModal() {
+  const users = (await KDB.getUsers()) || [];
+  let userCheckboxes = users.map(function(u) {
+    if (!u) return '';
+    var uname = u.username || u.nama;
+    var isMe = KU && uname === KU.username;
+    return '<label style="display:flex;align-items:center;gap:8px;padding:6px;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;margin-bottom:6px;font-size:0.83rem">'
+      + '<input type="checkbox" class="chk-group-member" value="' + uname + '" ' + (isMe ? 'checked disabled' : '') + '> '
+      + '<span><b>' + escapeHTML(u.nama || uname) + '</b> (' + escapeHTML(u.role || 'user') + ')' + (isMe ? ' - Anda' : '') + '</span>'
+      + '</label>';
+  }).join('');
+
+  openModal('<div class="form-grid">'
+    + '<div class="fg full"><label>Nama Grup Chat</label><input id="new-group-name" placeholder="Contoh: Tim Keuangan, Tim BOD & Leader" style="width:100%"></div>'
+    + '<div class="fg full"><label>Pilih Anggota Grup</label>'
+    + '<div style="max-height:200px;overflow-y:auto;padding:4px">' + userCheckboxes + '</div>'
+    + '</div></div>'
+    + '<div class="modal-footer">'
+    + '<button class="btn btn-outline" onclick="closeModalDirect()">Batal</button>'
+    + '<button class="btn btn-primary" onclick="simpanGrupChatBaru()">Buat Grup Chat</button>'
+    + '</div>', '➕ Buat Grup Chat Baru');
+}
+
+async function simpanGrupChatBaru() {
+  var nameEl = document.getElementById('new-group-name');
+  if (!nameEl) return;
+  var groupName = nameEl.value.trim();
+  if (!groupName) {
+    showAlert('Nama grup chat wajib diisi!', 'danger');
+    return;
+  }
+
+  var memberCheckboxes = document.querySelectorAll('.chk-group-member:checked');
+  var selectedMembers = Array.prototype.slice.call(memberCheckboxes).map(function(cb) { return cb.value; });
+  if (KU && selectedMembers.indexOf(KU.username) === -1) {
+    selectedMembers.push(KU.username);
+  }
+
+  showLoading(true);
+  try {
+    var groupId = 'group_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    var groupObj = {
+      id: groupId,
+      name: groupName,
+      members: selectedMembers,
+      createdBy: KU ? KU.username : 'system',
+      createdAt: new Date().toISOString()
+    };
+
+    await KDB.save('chat_groups', groupId, groupObj);
+    closeModalDirect();
+    showAlert('Grup chat "' + groupName + '" berhasil dibuat!', 'success');
+    _activeChatChannel = 'group:' + groupId;
+    if (currentSection === 'portal-komunikasi') {
+      renderSection('portal-komunikasi');
+    }
+  } catch(e) {
+    console.error('Gagal membuat grup chat:', e);
+    showAlert('Gagal membuat grup chat: ' + (e.message || e), 'danger');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function hapusAnggotaChat(event, username) {
+  if (event) event.stopPropagation();
+  if (!username) return;
+  if (!confirm('Apakah Anda yakin ingin menghapus user "' + username + '" dari sistem?')) return;
+
+  showLoading(true);
+  try {
+    await KDB.deleteUser(username);
+    showAlert('User ' + username + ' telah dihapus.', 'warning');
+    if (_activeChatChannel === 'dm:' + username) {
+      _activeChatChannel = 'global';
+    }
+    if (currentSection === 'portal-komunikasi') {
+      renderSection('portal-komunikasi');
+    }
+  } catch(e) {
+    console.error('Gagal menghapus user:', e);
+    showAlert('Gagal menghapus user: ' + (e.message || e), 'danger');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function hapusGrupChat(event, groupId) {
+  if (event) event.stopPropagation();
+  if (!groupId) return;
+  if (!confirm('Apakah Anda yakin ingin menghapus grup chat ini?')) return;
+
+  showLoading(true);
+  try {
+    await KDB.delete('chat_groups', groupId);
+    showAlert('Grup chat telah dihapus.', 'warning');
+    if (_activeChatChannel === 'group:' + groupId) {
+      _activeChatChannel = 'global';
+    }
+    if (currentSection === 'portal-komunikasi') {
+      renderSection('portal-komunikasi');
+    }
+  } catch(e) {
+    console.error('Gagal menghapus grup chat:', e);
+    showAlert('Gagal menghapus grup chat: ' + (e.message || e), 'danger');
+  } finally {
+    showLoading(false);
+  }
+}
 
 function renderSingleChatMessageHtml(m) {
   var userRole = String(KU && KU.role || '').toLowerCase();
@@ -17205,17 +17324,49 @@ async function clearAllPortalChatMessages() {
 async function renderPortalKomunikasi() {
   try {
     _klset('k_last_viewed_chat', new Date().toISOString());
-    // Save/Reset unread count
     _klset('k_unread_chat_count', 0);
     updateChatBadgeUI();
 
     const users = (await KDB.getUsers()) || [];
+    const groups = (await KDB.getAll('chat_groups')) || [];
     const rawMsgs = (await KDB.getAll('chat_messages')) || [];
-    // Sort messages by timestamp ascending
-    const msgs = rawMsgs.sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
-    _lastRenderedChatCount = msgs.length;
 
-    // Render Sidebar (registered users list)
+    var userRole = String(KU && KU.role || '').toLowerCase();
+    var isSuperOrAdmin = userRole === 'superadmin' || userRole === 'admin';
+
+    // 1. Render Saluran Utama
+    var isGlobalSelected = !_activeChatChannel || _activeChatChannel === 'global';
+    var globalChannelHtml = '<div class="chat-user-item ' + (isGlobalSelected ? 'active' : '') + '" onclick="switchChatChannel(\'global\')" style="cursor:pointer;padding:8px 10px;border-radius:8px;display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+      + '<span style="font-size:1.1rem">🌐</span>'
+      + '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:0.83rem;color:#1e293b">Chat Publik (Semua)</div><div style="font-size:0.65rem;color:#64748b">Semua pengguna</div></div>'
+      + '</div>';
+
+    // 2. Render Grup Chat Manual
+    let groupsHtml = '';
+    if (groups.length === 0) {
+      groupsHtml = '<div style="font-size:0.72rem;color:#94a3b8;padding:4px 6px;font-style:italic">Belum ada grup chat</div>';
+    } else {
+      groups.forEach(function(g) {
+        if (!g) return;
+        var channelKey = 'group:' + g.id;
+        var isSelected = _activeChatChannel === channelKey;
+        var canDeleteGroup = isSuperOrAdmin || (KU && g.createdBy === KU.username);
+        var deleteGroupBtn = canDeleteGroup
+          ? '<button type="button" onclick="hapusGrupChat(event, \'' + g.id + '\')" title="Hapus Grup Chat" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>'
+          : '';
+
+        groupsHtml += '<div class="chat-user-item ' + (isSelected ? 'active' : '') + '" onclick="switchChatChannel(\'' + channelKey + '\')" style="cursor:pointer;padding:8px;border-radius:8px;display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+          + '<span style="font-size:1.1rem">💬</span>'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-weight:700;font-size:0.82rem;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHTML(g.name) + '</div>'
+          + '<div style="font-size:0.65rem;color:#64748b">' + (g.members ? g.members.length : 0) + ' anggota</div>'
+          + '</div>'
+          + deleteGroupBtn
+          + '</div>';
+      });
+    }
+
+    // 3. Render Sidebar Anggota Aktif (Private Chat 1-on-1)
     let usersHtml = '';
     users.forEach(function(u) {
       if (!u) return;
@@ -17223,23 +17374,75 @@ async function renderPortalKomunikasi() {
       var urole = u.role || 'USER';
       var initial = (u.nama || uname).substring(0,2).toUpperCase();
       var isMe = KU && uname === KU.username;
-      usersHtml += '<div class="chat-user-item ' + (isMe ? 'active' : '') + '">'
-        + '<div class="chat-avatar" style="background:' + getAvatarColor(uname) + '">' + initial + '</div>'
-        + '<div>'
-        + '<div style="font-weight:600;font-size:0.85rem;color:#1e293b">' + (u.nama || uname) + (isMe ? ' (Anda)' : '') + '</div>'
-        + '<div style="font-size:0.7rem;color:#64748b;text-transform:uppercase">' + urole + '</div>'
+      var channelKey = 'dm:' + uname;
+      var isSelected = _activeChatChannel === channelKey || (isMe && _activeChatChannel === 'global');
+
+      var canDeleteUser = isSuperOrAdmin && !isMe;
+      var deleteUserBtn = canDeleteUser
+        ? '<button type="button" onclick="hapusAnggotaChat(event, \'' + uname + '\')" title="Hapus User ini" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>'
+        : '';
+
+      usersHtml += '<div class="chat-user-item ' + (isSelected ? 'active' : '') + '" onclick="switchChatChannel(\'' + (isMe ? 'global' : channelKey) + '\')" style="cursor:pointer;padding:8px;border-radius:8px;display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+        + '<div class="chat-avatar" style="width:28px;height:28px;font-size:0.7rem;background:' + getAvatarColor(uname) + '">' + initial + '</div>'
+        + '<div style="flex:1;min-width:0">'
+        + '<div style="font-weight:600;font-size:0.82rem;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHTML(u.nama || uname) + (isMe ? ' (Anda)' : '') + '</div>'
+        + '<div style="font-size:0.65rem;color:#64748b;text-transform:uppercase">' + urole + '</div>'
         + '</div>'
+        + deleteUserBtn
         + '</div>';
     });
+
+    // Filter Messages for Active Channel
+    const msgs = rawMsgs.filter(function(m) {
+      if (!m) return false;
+      var ch = m.channelId || 'global';
+
+      if (_activeChatChannel === 'global') {
+        return ch === 'global' || !m.channelId;
+      }
+
+      if (_activeChatChannel.startsWith('dm:')) {
+        var targetU = _activeChatChannel.substring(3);
+        if (ch === _activeChatChannel) return true;
+        var myU = KU ? KU.username : '';
+        var isDirect = (m.sender === myU && (m.recipient === targetU || m.receiver === targetU)) ||
+                       (m.sender === targetU && (m.recipient === myU || m.receiver === myU));
+        return isDirect;
+      }
+
+      if (_activeChatChannel.startsWith('group:')) {
+        return ch === _activeChatChannel;
+      }
+
+      return true;
+    }).sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
+
+    _lastRenderedChatCount = msgs.length;
 
     // Render Message Bubble List
     let msgsHtml = '';
     if (msgs.length === 0) {
-      msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
+      msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan pada saluran ini. Mulai obrolan pertama!</div>';
     } else {
       msgs.forEach(function(m) {
         if (m) msgsHtml += renderSingleChatMessageHtml(m);
       });
+    }
+
+    // Determine Channel Header Title
+    var channelTitle = '🌐 Chat Publik (Semua Anggota)';
+    var channelDesc = 'Gunakan saluran ini untuk berdiskusi publik dengan seluruh pengguna sistem secara real-time.';
+
+    if (_activeChatChannel.startsWith('dm:')) {
+      var targetUsername = _activeChatChannel.substring(3);
+      var targetUserObj = users.find(x => x && x.username === targetUsername);
+      channelTitle = '💬 Chat Pribadi dengan ' + (targetUserObj ? (targetUserObj.nama || targetUsername) : targetUsername);
+      channelDesc = 'Saluran percakapan rahasia 1-on-1.';
+    } else if (_activeChatChannel.startsWith('group:')) {
+      var targetGroupId = _activeChatChannel.substring(6);
+      var targetGroupObj = groups.find(x => x && x.id === targetGroupId);
+      channelTitle = '👥 Grup Chat: ' + (targetGroupObj ? targetGroupObj.name : 'Grup');
+      channelDesc = 'Grup percakapan internal (' + (targetGroupObj && targetGroupObj.members ? targetGroupObj.members.length : 0) + ' anggota).';
     }
 
     // Quick Action Buttons
@@ -17254,20 +17457,32 @@ async function renderPortalKomunikasi() {
       return '<button class="btn btn-sm" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer" onclick="useQuickChatTemplate(\'' + t.replace(/'/g, "\\'") + '\')">' + t + '</button>';
     }).join('');
 
-    var userRole = String(KU && KU.role || '').toLowerCase();
-    const clearBtn = (userRole === 'superadmin' || userRole === 'admin')
+    const clearBtn = isSuperOrAdmin
       ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="font-size:0.75rem;padding:4px 10px;border-radius:6px;border:1px solid #f43f5e;color:#f43f5e;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px">🗑️ Bersihkan Chat</button>'
       : '';
 
     const html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-      + '<div class="page-title" style="margin-bottom:0">💬 Portal Komunikasi Antar User</div>'
+      + '<div class="page-title" style="margin-bottom:0">' + escapeHTML(channelTitle) + '</div>'
       + clearBtn
       + '</div>'
-      + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">Gunakan portal ini untuk berdiskusi, memberikan instruksi, atau berkoordinasi langsung dengan tim keuangan secara real-time.</p>'
+      + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">' + escapeHTML(channelDesc) + '</p>'
       + '<div class="chat-container">'
-      + '  <div class="chat-sidebar">'
-      + '    <div class="chat-sidebar-header">👥 ANGGOTA AKTIF</div>'
-      + '    <div class="chat-user-list">' + usersHtml + '</div>'
+      + '  <div class="chat-sidebar" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto;padding:12px;background:#f8fafc;border-right:1px solid #e2e8f0;width:260px;flex-shrink:0">'
+      + '    <div>'
+      + '      <div style="font-size:0.68rem;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:6px;letter-spacing:0.5px">📢 SALURAN UTAMA</div>'
+      +        globalChannelHtml
+      + '    </div>'
+      + '    <div>'
+      + '      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+      + '        <div style="font-size:0.68rem;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:0.5px">👥 GRUP CHAT (' + groups.length + ')</div>'
+      + '        <button class="btn btn-xs" onclick="openBuatGrupModal()" style="font-size:0.68rem;padding:2px 8px;border-radius:4px;background:#1a237e;color:white;border:none;cursor:pointer;font-weight:700">+ Grup</button>'
+      + '      </div>'
+      +        groupsHtml
+      + '    </div>'
+      + '    <div>'
+      + '      <div style="font-size:0.68rem;font-weight:800;color:#64748b;text-transform:uppercase;margin-bottom:6px;letter-spacing:0.5px">👤 ANGGOTA AKTIF (' + users.length + ')</div>'
+      +        usersHtml
+      + '    </div>'
       + '  </div>'
       + '  <div class="chat-main">'
       + '    <div id="chat-messages-container" class="chat-msg-list">' + msgsHtml + '</div>'
@@ -17334,9 +17549,8 @@ function processChatFile(file) {
   var reader = new FileReader();
   reader.onload = function(e) {
     var base64Data = e.target.result;
-    // Ask for optional caption
     var caption = prompt('Tambahkan keterangan untuk file ini (opsional):', '');
-    if (caption === null) return; // User cancelled
+    if (caption === null) return;
 
     sendPortalChatMessage(caption, {
       data: base64Data,
@@ -17357,12 +17571,17 @@ async function sendPortalChatMessage(overrideText, fileObj) {
   var msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   var msg = {
     id: msgId,
-    sender: KU.username,
-    senderName: KU.nama || KU.username,
-    senderRole: KU.role,
+    sender: KU ? KU.username : 'user',
+    senderName: KU ? (KU.nama || KU.username) : 'User',
+    senderRole: KU ? KU.role : 'USER',
     text: txt,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    channelId: _activeChatChannel || 'global'
   };
+
+  if (_activeChatChannel && _activeChatChannel.startsWith('dm:')) {
+    msg.recipient = _activeChatChannel.substring(3);
+  }
 
   if (fileObj) {
     msg.fileData = fileObj.data;
@@ -17377,7 +17596,7 @@ async function sendPortalChatMessage(overrideText, fileObj) {
 
   // Re-render local view
   if (currentSection === 'portal-komunikasi') {
-    navigate('portal-komunikasi');
+    renderSection('portal-komunikasi');
   }
 }
 
@@ -17680,20 +17899,28 @@ function updateChatMessageList(rawMsgs) {
   const container = document.getElementById('chat-messages-container');
   if (!container) return;
 
-  const msgs = (rawMsgs || []).sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
+  const msgs = (rawMsgs || []).filter(function(m) {
+    if (!m) return false;
+    var ch = m.channelId || 'global';
+    if (_activeChatChannel === 'global') return ch === 'global' || !m.channelId;
+    if (_activeChatChannel.startsWith('dm:')) {
+      var targetU = _activeChatChannel.substring(3);
+      var myU = KU ? KU.username : '';
+      return ch === _activeChatChannel || (m.sender === myU && (m.recipient === targetU || m.receiver === targetU)) || (m.sender === targetU && (m.recipient === myU || m.receiver === myU));
+    }
+    if (_activeChatChannel.startsWith('group:')) return ch === _activeChatChannel;
+    return true;
+  }).sort((a,b) => (a.timestamp||'').localeCompare(b.timestamp||''));
 
-  // Jika jumlah pesan sama, kemungkinan besar tidak ada pesan baru yang perlu di-render
-  // Tapi untuk keamanan (misal ada edit pesan), kita cek perbandingan sederhana
   if (msgs.length === _lastRenderedChatCount) return;
-
   _lastRenderedChatCount = msgs.length;
 
   let msgsHtml = '';
   if (msgs.length === 0) {
-    msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan. Mulai obrolan pertama!</div>';
+    msgsHtml = '<div style="text-align:center;color:#64748b;margin-top:40px;"><span style="font-size:3rem;display:block;margin-bottom:12px;">💬</span>Belum ada percakapan pada saluran ini. Mulai obrolan pertama!</div>';
   } else {
     msgs.forEach(function(m) {
-      msgsHtml += renderSingleChatMessageHtml(m);
+      if (m) msgsHtml += renderSingleChatMessageHtml(m);
     });
   }
 

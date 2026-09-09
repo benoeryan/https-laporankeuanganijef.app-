@@ -10497,12 +10497,18 @@ async function approveItem(col, id) {
       }
 
       showAlert('Item berhasil disetujui.', 'success');
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       console.error('Approve error:', e);
       showAlert('Gagal menyetujui item: ' + e.message, 'danger');
   }
   showLoading(false);
+}
+
+function refreshCurrentSection() {
+  if (typeof currentSection !== 'undefined' && currentSection) {
+    renderSection(currentSection);
+  }
 }
 
 async function rejectItem(col, id) {
@@ -10533,7 +10539,7 @@ async function rejectItem(col, id) {
 
       await KDB.save(col, id, item);
       showAlert('Item telah ditolak.', 'warning');
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       console.error('Reject error:', e);
       showAlert('Gagal menolak item: ' + e.message, 'danger');
@@ -10603,7 +10609,7 @@ async function approveSemuaItem(col) {
       } else {
           showAlert('Berhasil menyetujui ' + successCount + ' item.', 'success');
       }
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       showAlert('Gagal memproses batch: ' + e.message, 'danger');
   }
@@ -10652,7 +10658,7 @@ async function rejectSemuaItem(col) {
           }
       }
       showAlert('Berhasil menolak ' + successCount + ' item.' + (errorCount ? ' Gagal: ' + errorCount : ''), 'warning');
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       showAlert('Gagal memproses batch: ' + e.message, 'danger');
   }
@@ -10684,7 +10690,7 @@ async function undoApproval(col, id) {
 
       await KDB.save(col, id, item);
       showAlert('Approval berhasil dibatalkan.', 'success');
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       showAlert('Gagal undo: ' + e.message, 'danger');
   }
@@ -10710,7 +10716,7 @@ async function resubmitItem(col, id) {
 
       await KDB.save(col, id, item);
       showAlert('Berhasil diajukan ulang.', 'success');
-      renderSection('dana-approval');
+      refreshCurrentSection();
   } catch(e) {
       showAlert('Gagal: ' + e.message, 'danger');
   }
@@ -10732,7 +10738,7 @@ async function resubmitAllDraft(col) {
       await KDB.save(col, item.id, item);
   }
   showLoading(false);
-  renderSection('dana-approval');
+  refreshCurrentSection();
 }
 
 async function simpanApprovers() {

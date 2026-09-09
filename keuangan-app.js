@@ -17162,24 +17162,93 @@ async function simpanGrupChatBaru() {
   }
 }
 
-async function hapusAnggotaChat(event, username) {
+function getHiddenChatChannels() {
+  if (!KU || !KU.username) return [];
+  return _klget('k_hidden_chat_' + KU.username, []);
+}
+
+function removeChatFromList(event, channelKey) {
   if (event) event.stopPropagation();
-  if (!username) return;
-  if (!confirm('Apakah Anda yakin ingin menghapus user "' + username + '" dari sistem?')) return;
+  if (!channelKey || !KU) return;
+  if (!confirm('Hapus percakapan ini dari daftar chat Anda?')) return;
+
+  var hidden = getHiddenChatChannels();
+  if (hidden.indexOf(channelKey) === -1) {
+    hidden.push(channelKey);
+    _klset('k_hidden_chat_' + KU.username, hidden);
+  }
+
+  if (_activeChatChannel === channelKey) {
+    _activeChatChannel = 'global';
+  }
+
+  showAlert('Percakapan dihapus dari daftar chat.', 'info');
+  _lastRenderedChatCount = -1;
+  if (currentSection === 'portal-komunikasi') {
+    renderSection('portal-komunikasi');
+  }
+}
+
+function unhideChatChannel(channelKey) {
+  if (!KU || !KU.username || !channelKey) return;
+  var hidden = getHiddenChatChannels();
+  var idx = hidden.indexOf(channelKey);
+  if (idx !== -1) {
+    hidden.splice(idx, 1);
+    _klset('k_hidden_chat_' + KU.username, hidden);
+  }
+}
+
+async function openMulaiObrolanModal() {
+  const users = (await KDB.getUsers()) || [];
+  const currentU = KU ? String(KU.username).toLowerCase() : '';
+
+  let userOptions = users.map(function(u) {
+    if (!u) return '';
+    var uname = u.username || u.nama;
+    if (String(uname).toLowerCase() === currentU) return '';
+    return '<option value="' + escapeHTML(uname) + '">' + escapeHTML((u.nama || uname).toUpperCase()) + ' (' + escapeHTML((u.role || 'USER').toUpperCase()) + ')</option>';
+  }).join('');
+
+  openModal('<div class="form-grid">'
+    + '<div class="fg full"><label style="font-weight:700;margin-bottom:6px">Pilih Karyawan</label>'
+    + '<select id="new-chat-user" style="width:100%;padding:10px 14px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:0.92rem;background:#fff">' + userOptions + '</select></div>'
+    + '<div class="fg full" style="margin-top:12px"><label style="font-weight:700;margin-bottom:6px">Pesan Pertama</label>'
+    + '<textarea id="new-chat-first-msg" rows="4" placeholder="Ketik pesan..." style="width:100%;padding:12px 14px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:0.92rem;font-family:inherit"></textarea></div>'
+    + '</div>'
+    + '<div style="margin-top:20px;display:flex;justify-content:flex-start">'
+    + '<button class="btn" style="background:#111;color:white;padding:10px 24px;border-radius:8px;font-weight:700;border:none;cursor:pointer" onclick="kirimObrolanBaru()">📥 Kirim</button>'
+    + '</div>', '💬 Mulai Obrolan Baru');
+}
+
+async function kirimObrolanBaru() {
+  var userSelect = document.getElementById('new-chat-user');
+  var msgInput = document.getElementById('new-chat-first-msg');
+
+  if (!userSelect || !userSelect.value) {
+    showAlert('Pilih karyawan terlebih dahulu!', 'danger');
+    return;
+  }
+  var targetUser = userSelect.value;
+  var firstMsg = msgInput ? msgInput.value.trim() : '';
+
+  if (!firstMsg) {
+    showAlert('Pesan pertama wajib diisi!', 'danger');
+    return;
+  }
 
   showLoading(true);
   try {
-    await KDB.deleteUser(username);
-    showAlert('User ' + username + ' telah dihapus.', 'warning');
-    if (_activeChatChannel === 'dm:' + username) {
-      _activeChatChannel = 'global';
-    }
-    if (currentSection === 'portal-komunikasi') {
-      renderSection('portal-komunikasi');
-    }
+    var channelKey = 'dm:' + targetUser;
+    unhideChatChannel(channelKey);
+    _activeChatChannel = channelKey;
+
+    closeModalDirect();
+    await sendPortalChatMessage(firstMsg);
+    showAlert('Obrolan baru berhasil dimulai!', 'success');
   } catch(e) {
-    console.error('Gagal menghapus user:', e);
-    showAlert('Gagal menghapus user: ' + (e.message || e), 'danger');
+    console.error('Gagal memulai obrolan baru:', e);
+    showAlert('Gagal mengirim pesan: ' + (e.message || e), 'danger');
   } finally {
     showLoading(false);
   }
@@ -17341,19 +17410,19 @@ async function renderPortalKomunikasi() {
       + '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:0.83rem;color:#1e293b">Chat Publik (Semua)</div><div style="font-size:0.65rem;color:#64748b">Semua pengguna</div></div>'
       + '</div>';
 
+    var hiddenChannels = getHiddenChatChannels();
+
     // 2. Render Grup Chat Manual
     let groupsHtml = '';
-    if (groups.length === 0) {
+    var visibleGroups = groups.filter(function(g) { return g && hiddenChannels.indexOf('group:' + g.id) === -1; });
+    if (visibleGroups.length === 0) {
       groupsHtml = '<div style="font-size:0.72rem;color:#94a3b8;padding:4px 6px;font-style:italic">Belum ada grup chat</div>';
     } else {
-      groups.forEach(function(g) {
+      visibleGroups.forEach(function(g) {
         if (!g) return;
         var channelKey = 'group:' + g.id;
         var isSelected = _activeChatChannel === channelKey;
-        var canDeleteGroup = isSuperOrAdmin || (KU && g.createdBy === KU.username);
-        var deleteGroupBtn = canDeleteGroup
-          ? '<button type="button" onclick="hapusGrupChat(event, \'' + g.id + '\')" title="Hapus Grup Chat" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>'
-          : '';
+        var deleteGroupBtn = '<button type="button" onclick="removeChatFromList(event, \'' + channelKey + '\')" title="Hapus dari daftar chat" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>';
 
         groupsHtml += '<div class="chat-user-item ' + (isSelected ? 'active' : '') + '" onclick="switchChatChannel(\'' + channelKey + '\')" style="cursor:pointer;padding:8px;border-radius:8px;display:flex;align-items:center;gap:8px;margin-bottom:4px">'
           + '<span style="font-size:1.1rem">💬</span>'
@@ -17366,9 +17435,18 @@ async function renderPortalKomunikasi() {
       });
     }
 
-    // 3. Render Sidebar Anggota Aktif (Private Chat 1-on-1)
+    // 3. Render Percakapan 1-on-1 (Anggota Aktif)
     let usersHtml = '';
-    users.forEach(function(u) {
+    var visibleUsers = users.filter(function(u) {
+      if (!u) return false;
+      var uname = u.username || u.nama || 'User';
+      var isMe = KU && uname === KU.username;
+      if (isMe) return true;
+      var channelKey = 'dm:' + uname;
+      return hiddenChannels.indexOf(channelKey) === -1;
+    });
+
+    visibleUsers.forEach(function(u) {
       if (!u) return;
       var uname = u.username || u.nama || 'User';
       var urole = u.role || 'USER';
@@ -17377,9 +17455,8 @@ async function renderPortalKomunikasi() {
       var channelKey = 'dm:' + uname;
       var isSelected = _activeChatChannel === channelKey || (isMe && _activeChatChannel === 'global');
 
-      var canDeleteUser = isSuperOrAdmin && !isMe;
-      var deleteUserBtn = canDeleteUser
-        ? '<button type="button" onclick="hapusAnggotaChat(event, \'' + uname + '\')" title="Hapus User ini" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>'
+      var deleteUserBtn = !isMe
+        ? '<button type="button" onclick="removeChatFromList(event, \'' + channelKey + '\')" title="Hapus dari daftar chat" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:0.75rem;padding:2px 4px;margin-left:auto" onmouseover="this.style.color=\'#ef4444\'" onmouseout="this.style.color=\'#94a3b8\'">🗑️</button>'
         : '';
 
       usersHtml += '<div class="chat-user-item ' + (isSelected ? 'active' : '') + '" onclick="switchChatChannel(\'' + (isMe ? 'global' : channelKey) + '\')" style="cursor:pointer;padding:8px;border-radius:8px;display:flex;align-items:center;gap:8px;margin-bottom:4px">'
@@ -17457,13 +17534,15 @@ async function renderPortalKomunikasi() {
       return '<button class="btn btn-sm" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.75rem;cursor:pointer" onclick="useQuickChatTemplate(\'' + t.replace(/'/g, "\\'") + '\')">' + t + '</button>';
     }).join('');
 
-    const clearBtn = isSuperOrAdmin
-      ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="font-size:0.75rem;padding:4px 10px;border-radius:6px;border:1px solid #f43f5e;color:#f43f5e;background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px">🗑️ Bersihkan Chat</button>'
-      : '';
+    const topActionsHtml = '<div style="display:flex;align-items:center;gap:8px">'
+      + '<button class="btn btn-sm" onclick="openMulaiObrolanModal()" style="background:#111;color:white;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.8rem">+ Chat</button>'
+      + '<button class="btn btn-sm" onclick="openBuatGrupModal()" style="background:#1565c0;color:white;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;font-size:0.8rem">👥 Group</button>'
+      + (isSuperOrAdmin ? '<button class="btn btn-sm" onclick="clearAllPortalChatMessages()" title="Hapus Semua Chat" style="background:#c62828;color:white;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:0.8rem">🗑️</button>' : '')
+      + '</div>';
 
     const html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
       + '<div class="page-title" style="margin-bottom:0">' + escapeHTML(channelTitle) + '</div>'
-      + clearBtn
+      + topActionsHtml
       + '</div>'
       + '<p class="text-muted" style="margin-top:2px;margin-bottom:15px">' + escapeHTML(channelDesc) + '</p>'
       + '<div class="chat-container">'

@@ -3763,10 +3763,6 @@ async function autoJurnalJatuhTempo() {
           createdBy: 'system-auto-jatuh-tempo', createdAt: new Date().toISOString()
         });
         await KDB.save('danamasuk', d.id, Object.assign({}, d, { jurnalId: jurnalIdDM, jurnalCreatedAt: new Date().toISOString() }));
-          totalDebit: nominalDM, totalKredit: nominalDM,
-          createdBy: 'system-auto-jatuh-tempo', createdAt: new Date().toISOString()
-        });
-        await KDB.save('danamasuk', d.id, Object.assign({}, d, { jurnalId: jurnalIdDM, jurnalCreatedAt: new Date().toISOString() }));
         count++;
       } catch (e) {
         errors.push('Dana Masuk ' + d.id + ': ' + (e.message || e));

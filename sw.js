@@ -1,6 +1,6 @@
 // NOTE: Push notifications are handled by firebase-messaging-sw.js (separate service worker).
 // This SW handles caching only and should not interfere with the FCM messaging SW.
-const CACHE_NAME = "keuangan-ijef-v2";
+const CACHE_NAME = "keuangan-ijef-v3";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();

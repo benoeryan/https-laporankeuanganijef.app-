@@ -319,9 +319,11 @@ async function syncPermohonanLinkedJurnal(permohonan) {
   var jurnalList = await KDB.getAll('jurnal');
   var jurnal = jurnalList.find(function(j) { return j.id === permohonan.jurnalId; });
   if (!jurnal) return;
+  var akunList = await getAkun();
   var nominal = parseFloat(permohonan.nominal) || 0;
   var akunDebit = permohonan.akunDebit || '5-2200';
-  var akunKredit = permohonan.akunKredit || '1-1100';
+  var detectedBank = permohonan.namaBank ? findPreferredBankAccountCode(akunList, permohonan.namaBank, permohonan.akunKredit || '1-1101-2') : null;
+  var akunKredit = detectedBank || permohonan.akunKredit || '1-1101-2';
   jurnal.tanggal = permohonan.jatuhTempo || permohonan.tanggal || jurnal.tanggal;
   jurnal.noRef = permohonan.noPOInvoice || permohonan.id || jurnal.noRef;
   jurnal.keterangan = permohonan.keterangan || ('Pembayaran - ' + (permohonan.namaPemohon || ''));
@@ -345,8 +347,12 @@ async function syncDanaMasukLinkedJurnal(danaMasuk) {
   var jurnalList = await KDB.getAll('jurnal');
   var jurnal = jurnalList.find(function(j) { return j.id === danaMasuk.jurnalId; });
   if (!jurnal) return;
+  var akunList = await getAkun();
   var nominal = parseFloat(danaMasuk.nominal) || 0;
-  var akunDebit = danaMasuk.akunTerima || '1-1100';
+  var detectedBank = (danaMasuk.sumber || danaMasuk.namaRekening)
+    ? findPreferredBankAccountCode(akunList, (danaMasuk.sumber || '') + ' ' + (danaMasuk.namaRekening || ''), danaMasuk.akunTerima || '1-1101-2')
+    : null;
+  var akunDebit = detectedBank || danaMasuk.akunTerima || '1-1101-2';
   var akunKredit = danaMasuk.kategori && (danaMasuk.kategori.startsWith('4-') || danaMasuk.kategori.startsWith('3-') || danaMasuk.kategori.startsWith('1-'))
     ? danaMasuk.kategori : '4-2000';
   jurnal.tanggal = danaMasuk.tanggal || jurnal.tanggal;
@@ -3655,6 +3661,7 @@ async function autoJurnalJatuhTempo() {
 
     var count = 0;
     var errors = [];
+    var akunList = await getAkun();
 
     // Proses Permohonan Dana -> Jurnal (Debit Beban, Kredit Kas/Bank)
     for (var i = 0; i < pdReady.length; i++) {
@@ -3668,7 +3675,8 @@ async function autoJurnalJatuhTempo() {
           continue;
         }
         var akunDebit = p.akunDebit || '5-2200';
-        var akunKredit = p.akunKredit || await getAkunKasBank();
+        var detectedBankP = p.namaBank ? findPreferredBankAccountCode(akunList, p.namaBank, p.akunKredit || '1-1101-2') : null;
+        var akunKredit = detectedBankP || p.akunKredit || await getAkunKasBank();
         var nominal = parseNominal(p.nominal);
         var jurnalId = genId('JU');
         await KDB.save('jurnal', jurnalId, {
@@ -3703,7 +3711,10 @@ async function autoJurnalJatuhTempo() {
           await KDB.save('danamasuk', d.id, Object.assign({}, d, { jurnalId: existingDM.id }));
           continue;
         }
-        var akunDebitDM = d.akunTerima || await getAkunKasBank();
+        var detectedBankD = (d.sumber || d.namaRekening)
+          ? findPreferredBankAccountCode(akunList, (d.sumber || '') + ' ' + (d.namaRekening || ''), d.akunTerima || '1-1101-2')
+          : null;
+        var akunDebitDM = detectedBankD || d.akunTerima || await getAkunKasBank();
         var akunKreditDM = d.kategori && (d.kategori.startsWith('4-') || d.kategori.startsWith('3-') || d.kategori.startsWith('1-')) ? d.kategori : '4-1000';
         var nominalDM = parseNominal(d.nominal);
         var jurnalIdDM = genId('JU');
@@ -3718,6 +3729,10 @@ async function autoJurnalJatuhTempo() {
             { akun: akunDebitDM, ket: 'Dana masuk dari ' + d.sumber, debit: nominalDM, kredit: 0 },
             { akun: akunKreditDM, ket: d.keterangan || d.sumber, debit: 0, kredit: nominalDM }
           ],
+          totalDebit: nominalDM, totalKredit: nominalDM,
+          createdBy: 'system-auto-jatuh-tempo', createdAt: new Date().toISOString()
+        });
+        await KDB.save('danamasuk', d.id, Object.assign({}, d, { jurnalId: jurnalIdDM, jurnalCreatedAt: new Date().toISOString() }));
           totalDebit: nominalDM, totalKredit: nominalDM,
           createdBy: 'system-auto-jatuh-tempo', createdAt: new Date().toISOString()
         });
@@ -9808,7 +9823,11 @@ async function submitPermohonan(isDraft) {
   const id = genId('PD');
   const approvers = await getApprovers();
   const akunDebit  = (document.getElementById('pd-akun-debit')  || {}).value || '5-2200';
-  const akunKredit = (document.getElementById('pd-akun-kredit') || {}).value || '1-1100';
+  var rawAkunKredit = (document.getElementById('pd-akun-kredit') || {}).value;
+  var namaBankVal = document.getElementById('pd-bank').value;
+  var akunList = await getAkun();
+  var detectedBankP = namaBankVal ? findPreferredBankAccountCode(akunList, namaBankVal, rawAkunKredit || '1-1101-2') : null;
+  const akunKredit = detectedBankP || rawAkunKredit || '1-1101-2';
   const data = { id: id, tipe: 'permohonan', pemohon: KU.username, namaPemohon: document.getElementById('pd-pemohon').value || KU.nama, namaPIC: (document.getElementById('pd-pic')||{}).value || KU.nama, namaLeader: document.getElementById('pd-leader').value, noPOInvoice: document.getElementById('pd-nopo').value, nominal: nominal, jatuhTempo: document.getElementById('pd-jt').value, tipeTransaksi: document.getElementById('pd-tipe').value, namaBank: document.getElementById('pd-bank').value, noRekening: document.getElementById('pd-norek').value, namaRekening: document.getElementById('pd-namarek').value, keterangan: ket, buktiDokumen: document.getElementById('pd-bukti').value, akunDebit: akunDebit, akunKredit: akunKredit, tanggal: today(), status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Permohonan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
   await KDB.save('permohonan', id, data);
   if (!isDraft) {
@@ -9959,9 +9978,10 @@ async function buatJurnalDariPermohonan(id) {
     await KDB.save('permohonan', id, Object.assign({}, p, { jurnalId: existingJurnal.id }));
     return;
   }
-  // Use COA from permohonan, fallback to defaults
+  var akunList = await getAkun();
+  var detectedBank = p.namaBank ? findPreferredBankAccountCode(akunList, p.namaBank, p.akunKredit || '1-1101-2') : null;
   const akunDebit  = p.akunDebit  || '5-2200';
-  const akunKredit = p.akunKredit || '1-1100';
+  const akunKredit = detectedBank || p.akunKredit || '1-1101-2';
   var nominal = parseFloat(p.nominal) || 0;
   const jurnalId = genId('JU');
   await KDB.save('jurnal', jurnalId, {
@@ -10059,7 +10079,14 @@ async function submitDanaMasuk(isDraft) {
   if (!isDraft && (!nominal || !sumber)) { showAlert('Sumber dan nominal wajib diisi!', 'danger'); return; }
   const id = genId('DM');
   const approvers = await getApprovers();
-  const data = { id: id, tipe: 'danamasuk', sumber: sumber, namaPIC: (document.getElementById('dm-pic')||{}).value || KU.nama, noRef: document.getElementById('dm-ref').value, tanggal: document.getElementById('dm-tgl').value || today(), nominal: nominal, tipeTransaksi: document.getElementById('dm-tipe').value, akunTerima: document.getElementById('dm-akun-terima').value, kategori: document.getElementById('dm-akun-kredit').value, namaRekening: document.getElementById('dm-namarek').value, keterangan: document.getElementById('dm-ket').value, buktiDokumen: document.getElementById('dm-bukti').value, status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Dana masuk dicatat dan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
+  var rawAkunTerima = (document.getElementById('dm-akun-terima') || {}).value;
+  var namaRekVal = (document.getElementById('dm-namarek') || {}).value;
+  var akunList = await getAkun();
+  var detectedBankD = (sumber || namaRekVal)
+    ? findPreferredBankAccountCode(akunList, sumber + ' ' + namaRekVal, rawAkunTerima || '1-1101-2')
+    : null;
+  const akunTerima = detectedBankD || rawAkunTerima || '1-1101-2';
+  const data = { id: id, tipe: 'danamasuk', sumber: sumber, namaPIC: (document.getElementById('dm-pic')||{}).value || KU.nama, noRef: document.getElementById('dm-ref').value, tanggal: document.getElementById('dm-tgl').value || today(), nominal: nominal, tipeTransaksi: document.getElementById('dm-tipe').value, akunTerima: akunTerima, kategori: document.getElementById('dm-akun-kredit').value, namaRekening: document.getElementById('dm-namarek').value, keterangan: document.getElementById('dm-ket').value, buktiDokumen: document.getElementById('dm-bukti').value, status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Dana masuk dicatat dan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
   await KDB.save('danamasuk', id, data);
   if (!isDraft) {
     kirimNotifikasi('📥 Dana Masuk Baru', (sumber||KU.nama) + ' mencatat dana masuk ' + fmtRp(nominal), '');
@@ -10190,8 +10217,11 @@ async function buatJurnalDariDanaMasuk(id) {
     await KDB.save('danamasuk', id, Object.assign({}, d, { jurnalId: existingJurnal.id }));
     return;
   }
-  // Use stored COA fields
-  const akunDebit  = d.akunTerima || '1-1100'; // Kas/Bank yang menerima
+  var akunList = await getAkun();
+  var detectedBank = (d.sumber || d.namaRekening)
+    ? findPreferredBankAccountCode(akunList, (d.sumber || '') + ' ' + (d.namaRekening || ''), d.akunTerima || '1-1101-2')
+    : null;
+  const akunDebit  = detectedBank || d.akunTerima || '1-1101-2';
   const akunKredit = d.kategori && (d.kategori.startsWith('4-') || d.kategori.startsWith('3-') || d.kategori.startsWith('1-'))
     ? d.kategori : '4-2000';
   var nominal = parseFloat(d.nominal) || 0;

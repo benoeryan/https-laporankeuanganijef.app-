@@ -2948,7 +2948,9 @@ function updateJurnalTotal() {
   }
 }
 
+var _submittingJurnal = false;
 async function simpanJurnal() {
+  if (_submittingJurnal) return;
   const tgl = document.getElementById('j-tgl').value;
   const ket = document.getElementById('j-ket').value.trim();
   const ref = document.getElementById('j-ref').value.trim();
@@ -2964,10 +2966,19 @@ async function simpanJurnal() {
   });
   if (lines.length < 2) { showAlert('Minimal 2 baris jurnal!', 'danger'); return; }
   if (Math.abs(totalD - totalK) > 1) { showAlert('Jurnal tidak balance! Debit tidak sama dengan Kredit', 'danger'); return; }
-  const id = genId('JU');
-  await KDB.save('jurnal', id, { id: id, tanggal: tgl, keterangan: ket, noRef: ref, namaPIC: (document.getElementById('j-pic')||{}).value || KU.nama, lines: lines, totalDebit: totalD, totalKredit: totalK, tipe: 'umum', createdBy: KU.username, createdAt: new Date().toISOString() });
-  showAlert('Jurnal berhasil disimpan!');
-  navigate('jurnal-umum');
+  _submittingJurnal = true;
+  showLoading(true);
+  try {
+    const id = genId('JU');
+    await KDB.save('jurnal', id, { id: id, tanggal: tgl, keterangan: ket, noRef: ref, namaPIC: (document.getElementById('j-pic')||{}).value || KU.nama, lines: lines, totalDebit: totalD, totalKredit: totalK, tipe: 'umum', createdBy: KU.username, createdAt: new Date().toISOString() });
+    showAlert('Jurnal berhasil disimpan!');
+    navigate('jurnal-umum');
+  } catch (err) {
+    showAlert('Gagal menyimpan jurnal: ' + (err.message || err), 'danger');
+  } finally {
+    _submittingJurnal = false;
+    showLoading(false);
+  }
 }
 
 async function hapusJurnal(id) {
@@ -3601,7 +3612,7 @@ async function integrasiPermohonanDanaMasukKeJurnal() {
     var p = pdBelumJurnal[i];
     var akunDebit = p.akunDebit || '5-2200';
     var akunKredit = p.akunKredit || await getAkunKasBank();
-    var jurnalId = genId('JU');
+    var jurnalId = 'JU-PD-' + p.id;
     await KDB.save('jurnal', jurnalId, {
       id: jurnalId,
       tanggal: p.jatuhTempo || p.tanggal || today(),
@@ -3625,7 +3636,7 @@ async function integrasiPermohonanDanaMasukKeJurnal() {
     var d = dmBelumJurnal[i];
     var akunDebitDM = d.akunTerima || await getAkunKasBank();
     var akunKreditDM = d.kategori && (d.kategori.startsWith('4-') || d.kategori.startsWith('3-') || d.kategori.startsWith('1-')) ? d.kategori : '4-1000';
-    var jurnalIdDM = genId('JU');
+    var jurnalIdDM = 'JU-DM-' + d.id;
     await KDB.save('jurnal', jurnalIdDM, {
       id: jurnalIdDM,
       tanggal: d.tanggal || today(),
@@ -3698,7 +3709,7 @@ async function autoJurnalJatuhTempo() {
       var p = pdReady[i];
       try {
         // Cek duplikasi: apakah sudah ada jurnal dengan meta.permohonanId === p.id
-        var existingPD = allJurnal.find(function(j){ return j.meta && j.meta.permohonanId === p.id; });
+        var existingPD = allJurnal.find(function(j){ return (j.meta && j.meta.permohonanId === p.id) || j.id === ('JU-PD-' + p.id); });
         if (existingPD) {
           // Update permohonan dengan jurnalId yang sudah ada, skip creation
           await KDB.save('permohonan', p.id, Object.assign({}, p, { jurnalId: existingPD.id }));
@@ -3708,7 +3719,7 @@ async function autoJurnalJatuhTempo() {
         var detectedBankP = p.namaBank ? findPreferredBankAccountCode(akunList, p.namaBank, p.akunKredit || '1-1101-2') : null;
         var akunKredit = detectedBankP || p.akunKredit || await getAkunKasBank();
         var nominal = parseNominal(p.nominal);
-        var jurnalId = genId('JU');
+        var jurnalId = 'JU-PD-' + p.id;
         await KDB.save('jurnal', jurnalId, {
           id: jurnalId,
           tanggal: p.jatuhTempo || today(),
@@ -3735,7 +3746,7 @@ async function autoJurnalJatuhTempo() {
       var d = dmReady[i];
       try {
         // Cek duplikasi: apakah sudah ada jurnal dengan meta.danaMasukId === d.id
-        var existingDM = allJurnal.find(function(j){ return j.meta && j.meta.danaMasukId === d.id; });
+        var existingDM = allJurnal.find(function(j){ return (j.meta && j.meta.danaMasukId === d.id) || j.id === ('JU-DM-' + d.id); });
         if (existingDM) {
           // Update danamasuk dengan jurnalId yang sudah ada, skip creation
           await KDB.save('danamasuk', d.id, Object.assign({}, d, { jurnalId: existingDM.id }));
@@ -3747,7 +3758,7 @@ async function autoJurnalJatuhTempo() {
         var akunDebitDM = detectedBankD || d.akunTerima || await getAkunKasBank();
         var akunKreditDM = d.kategori && (d.kategori.startsWith('4-') || d.kategori.startsWith('3-') || d.kategori.startsWith('1-')) ? d.kategori : '4-1000';
         var nominalDM = parseNominal(d.nominal);
-        var jurnalIdDM = genId('JU');
+        var jurnalIdDM = 'JU-DM-' + d.id;
         await KDB.save('jurnal', jurnalIdDM, {
           id: jurnalIdDM,
           tanggal: d.tanggal || today(),
@@ -4317,6 +4328,79 @@ async function batchHapusAuditTransaksiLama() {
   setTimeout(function() { jalankanAuditTransaksiLama(); }, 300);
 }
 
+// Bersihkan sekaligus SEMUA duplikat dan orphan yang terdeteksi
+async function bersihkanSemuaDuplikatDanOrphanAudit() {
+  showLoading(true);
+  try {
+    var jurnal = await KDB.getAll('jurnal');
+    var pdList = await KDB.getAll('permohonan');
+    var dmList = await KDB.getAll('danamasuk');
+    var pdMap = {};
+    var dmMap = {};
+    pdList.forEach(function(p) { pdMap[p.id] = p; });
+    dmList.forEach(function(d) { dmMap[d.id] = d; });
+
+    var duplicateMap = {};
+    var toTrash = [];
+
+    // Deteksi duplikat
+    jurnal.forEach(function(j) {
+      var key = getJurnalDuplicateKey(j);
+      if (!key) return;
+      if (!duplicateMap[key]) {
+        duplicateMap[key] = j;
+      } else {
+        toTrash.push({ id: j.id, reason: 'duplicate', obj: j });
+      }
+    });
+
+    // Deteksi orphan
+    jurnal.forEach(function(j) {
+      if (j.sumber === 'permohonan-dana' && j.meta && j.meta.permohonanId && !pdMap[j.meta.permohonanId]) {
+        if (!toTrash.some(function(t){ return t.id === j.id; })) {
+          toTrash.push({ id: j.id, reason: 'orphan', obj: j });
+        }
+      }
+      if (j.sumber === 'dana-masuk' && j.meta && j.meta.danaMasukId && !dmMap[j.meta.danaMasukId]) {
+        if (!toTrash.some(function(t){ return t.id === j.id; })) {
+          toTrash.push({ id: j.id, reason: 'orphan', obj: j });
+        }
+      }
+    });
+
+    if (toTrash.length === 0) {
+      showLoading(false);
+      showAlert('Tidak ditemukan duplikat atau jurnal yatim untuk dibersihkan.', 'info');
+      return;
+    }
+
+    if (!confirm('Ditemukan ' + toTrash.length + ' jurnal bermasalah (duplikat & yatim).\n\nBersihkan dan pindahkan ke Tempat Sampah sekarang agar saldo kembali normal?')) {
+      showLoading(false);
+      return;
+    }
+
+    for (var i = 0; i < toTrash.length; i++) {
+      var item = toTrash[i];
+      await KDB.save('jurnal_trash', item.id, Object.assign({}, item.obj, {
+        deletedAt: new Date().toISOString(),
+        deletedBy: (KU && KU.username) ? KU.username : 'system-cleanup',
+        cleanReason: item.reason
+      }));
+      await KDB.delete('jurnal', item.id);
+    }
+
+    showLoading(false);
+    showAlert('Berhasil membersihkan ' + toTrash.length + ' jurnal bermasalah! Saldo kembali normal.', 'success');
+    closeModalDirect();
+    if (typeof currentSection !== 'undefined' && currentSection && typeof navigate === 'function') {
+      navigate(currentSection);
+    }
+  } catch (err) {
+    showLoading(false);
+    showAlert('Gagal membersihkan: ' + (err.message || err), 'danger');
+  }
+}
+
 async function jalankanAuditTransaksiLama() {
   showLoading(true);
   try {
@@ -4508,6 +4592,7 @@ async function jalankanAuditTransaksiLama() {
         + '<label style="font-size:0.82rem"><input type="checkbox" onchange="toggleAuditTransaksiLama(this.checked)"> Pilih Semua</label>'
         + '<button class="btn btn-sm btn-success" onclick="batchSyncAuditTransaksiLama()">🔄 Sync Terpilih</button>'
         + '<button class="btn btn-sm btn-danger" onclick="batchHapusAuditTransaksiLama()">🗑️ Hapus Terpilih</button>'
+        + ((summary.duplicate > 0 || summary.orphan > 0) ? '<button class="btn btn-sm" style="background:#b71c1c;color:#fff" onclick="bersihkanSemuaDuplikatDanOrphanAudit()">⚡ Bersihkan Duplikat & Orphan (' + (summary.duplicate + summary.orphan) + ')</button>' : '')
         + '<span id="audit-old-count" class="text-muted"></span>'
         + '</div>'
         + '<div class="audit-old-toolbar-right">'
@@ -8044,7 +8129,9 @@ async function addPCLine() {
   tbody.appendChild(tr);
 }
 
+var _submittingPettyCash = false;
 async function simpanPettyCashJurnal() {
+  if (_submittingPettyCash) return;
   var tgl = (document.getElementById('pc-tgl')||{}).value || today();
   var ket = (document.getElementById('pc-ket')||{}).value || '';
   var ref = (document.getElementById('pc-ref')||{}).value || '';
@@ -8060,15 +8147,25 @@ async function simpanPettyCashJurnal() {
   });
   if (lines.length < 1) { showAlert('Minimal 1 baris transaksi!', 'danger'); return; }
   if (Math.abs(totalD - totalK) > 0.01) { showAlert('Total Debit dan Kredit harus balance! Selisih: ' + fmtRp(Math.abs(totalD - totalK)), 'danger'); return; }
-  // Simpan sebagai jurnal dengan sumber petty-cash
-  var jId = genId('JU');
-  await KDB.save('jurnal', jId, { id: jId, tanggal: tgl, keterangan: ket, noRef: ref || jId, tipe: 'umum', sumber: 'petty-cash', lines: lines, totalDebit: totalD, totalKredit: totalK, createdBy: KU.username, createdAt: new Date().toISOString() });
-  // Simpan ke petty cash collection untuk tracking buku kas kecil
-  // Jumlah = total pengeluaran (debit pada akun beban), tipe = keluar
-  var pcId = genId('PC');
-  await KDB.save('pettycash', pcId, { id: pcId, tanggal: tgl, keterangan: ket, noRef: ref || jId, jumlah: totalD, kategori: 'Pengeluaran', tipe: 'keluar', jurnalId: jId, akunDebit: lines[0] ? lines[0].akun : '', akunKredit: lines.length > 1 ? lines[1].akun : '', createdBy: KU.username, createdAt: new Date().toISOString() });
-  showAlert('Transaksi petty cash disimpan & terintegrasi ke jurnal!');
-  navigate('kalk-pettycash');
+
+  _submittingPettyCash = true;
+  showLoading(true);
+  try {
+    // Simpan sebagai jurnal dengan sumber petty-cash
+    var jId = genId('JU');
+    await KDB.save('jurnal', jId, { id: jId, tanggal: tgl, keterangan: ket, noRef: ref || jId, tipe: 'umum', sumber: 'petty-cash', lines: lines, totalDebit: totalD, totalKredit: totalK, createdBy: KU.username, createdAt: new Date().toISOString() });
+    // Simpan ke petty cash collection untuk tracking buku kas kecil
+    // Jumlah = total pengeluaran (debit pada akun beban), tipe = keluar
+    var pcId = genId('PC');
+    await KDB.save('pettycash', pcId, { id: pcId, tanggal: tgl, keterangan: ket, noRef: ref || jId, jumlah: totalD, kategori: 'Pengeluaran', tipe: 'keluar', jurnalId: jId, akunDebit: lines[0] ? lines[0].akun : '', akunKredit: lines.length > 1 ? lines[1].akun : '', createdBy: KU.username, createdAt: new Date().toISOString() });
+    showAlert('Transaksi petty cash disimpan & terintegrasi ke jurnal!');
+    navigate('kalk-pettycash');
+  } catch (err) {
+    showAlert('Gagal menyimpan petty cash: ' + (err.message || err), 'danger');
+  } finally {
+    _submittingPettyCash = false;
+    showLoading(false);
+  }
 }
 
 async function setSaldoPettyCash() {
@@ -8386,6 +8483,7 @@ async function hapusPermohonanPC(id) {
   if (p && p.jurnalId) {
     await KDB.delete('jurnal', p.jurnalId);
   }
+  await KDB.delete('jurnal', 'JU-PD-' + id);
   await KDB.delete('permohonan', id);
   showAlert('Permohonan dana dihapus!');
   navigate('kalk-pettycash');
@@ -8437,6 +8535,7 @@ async function hapusDanaMasukPC(id) {
   if (d && d.jurnalId) {
     await KDB.delete('jurnal', d.jurnalId);
   }
+  await KDB.delete('jurnal', 'JU-DM-' + id);
   await KDB.delete('danamasuk', id);
   showAlert('Dana masuk dihapus!');
   navigate('kalk-pettycash');
@@ -9842,26 +9941,37 @@ function handleBuktiUpload(input, fieldId) {
   reader.readAsDataURL(file);
 }
 
+var _submittingPermohonan = false;
 async function submitPermohonan(isDraft) {
+  if (_submittingPermohonan) return;
   const nominal = parseNominal(document.getElementById('pd-nominal').value);
   const ket = document.getElementById('pd-ket').value.trim();
   if (!isDraft && (!nominal || !ket)) { showAlert('Nominal dan keterangan wajib diisi!', 'danger'); return; }
-  const id = genId('PD');
-  const approvers = await getApprovers();
-  const akunDebit  = (document.getElementById('pd-akun-debit')  || {}).value || '5-2200';
-  var rawAkunKredit = (document.getElementById('pd-akun-kredit') || {}).value;
-  var namaBankVal = document.getElementById('pd-bank').value;
-  var akunList = await getAkun();
-  var detectedBankP = namaBankVal ? findPreferredBankAccountCode(akunList, namaBankVal, rawAkunKredit || '1-1101-2') : null;
-  const akunKredit = detectedBankP || rawAkunKredit || '1-1101-2';
-  const data = { id: id, tipe: 'permohonan', pemohon: KU.username, namaPemohon: document.getElementById('pd-pemohon').value || KU.nama, namaPIC: (document.getElementById('pd-pic')||{}).value || KU.nama, namaLeader: document.getElementById('pd-leader').value, noPOInvoice: document.getElementById('pd-nopo').value, nominal: nominal, jatuhTempo: document.getElementById('pd-jt').value, tipeTransaksi: document.getElementById('pd-tipe').value, namaBank: document.getElementById('pd-bank').value, noRekening: document.getElementById('pd-norek').value, namaRekening: document.getElementById('pd-namarek').value, keterangan: ket, buktiDokumen: document.getElementById('pd-bukti').value, akunDebit: akunDebit, akunKredit: akunKredit, tanggal: today(), status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Permohonan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
-  await KDB.save('permohonan', id, data);
-  if (!isDraft) {
-    kirimNotifikasi('📤 Permohonan Dana Baru', (data.namaPemohon||KU.nama) + ' mengajukan ' + fmtRp(nominal) + ' — ' + (ket.substring(0,60)||'-'), '');
-    kirimEmailNotifikasi('Permohonan Dana Baru', 'Pemohon: ' + (data.namaPemohon||KU.nama) + '\nNominal: ' + fmtRp(nominal) + '\nKeterangan: ' + ket + '\nStatus: Pending Layer 1', 'pd_baru');
+  _submittingPermohonan = true;
+  showLoading(true);
+  try {
+    const id = genId('PD');
+    const approvers = await getApprovers();
+    const akunDebit  = (document.getElementById('pd-akun-debit')  || {}).value || '5-2200';
+    var rawAkunKredit = (document.getElementById('pd-akun-kredit') || {}).value;
+    var namaBankVal = document.getElementById('pd-bank').value;
+    var akunList = await getAkun();
+    var detectedBankP = namaBankVal ? findPreferredBankAccountCode(akunList, namaBankVal, rawAkunKredit || '1-1101-2') : null;
+    const akunKredit = detectedBankP || rawAkunKredit || '1-1101-2';
+    const data = { id: id, tipe: 'permohonan', pemohon: KU.username, namaPemohon: document.getElementById('pd-pemohon').value || KU.nama, namaPIC: (document.getElementById('pd-pic')||{}).value || KU.nama, namaLeader: document.getElementById('pd-leader').value, noPOInvoice: document.getElementById('pd-nopo').value, nominal: nominal, jatuhTempo: document.getElementById('pd-jt').value, tipeTransaksi: document.getElementById('pd-tipe').value, namaBank: document.getElementById('pd-bank').value, noRekening: document.getElementById('pd-norek').value, namaRekening: document.getElementById('pd-namarek').value, keterangan: ket, buktiDokumen: document.getElementById('pd-bukti').value, akunDebit: akunDebit, akunKredit: akunKredit, tanggal: today(), status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Permohonan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
+    await KDB.save('permohonan', id, data);
+    if (!isDraft) {
+      kirimNotifikasi('📤 Permohonan Dana Baru', (data.namaPemohon||KU.nama) + ' mengajukan ' + fmtRp(nominal) + ' — ' + (ket.substring(0,60)||'-'), '');
+      kirimEmailNotifikasi('Permohonan Dana Baru', 'Pemohon: ' + (data.namaPemohon||KU.nama) + '\nNominal: ' + fmtRp(nominal) + '\nKeterangan: ' + ket + '\nStatus: Pending Layer 1', 'pd_baru');
+    }
+    showAlert(isDraft ? 'Draft disimpan!' : 'Permohonan berhasil diajukan ke Layer 1!');
+    navigate('dana-permohonan');
+  } catch (err) {
+    showAlert('Gagal mengajukan permohonan: ' + (err.message || err), 'danger');
+  } finally {
+    _submittingPermohonan = false;
+    showLoading(false);
   }
-  showAlert(isDraft ? 'Draft disimpan!' : 'Permohonan berhasil diajukan ke Layer 1!');
-  navigate('dana-permohonan');
 }
 
 async function ajukanPermohonan(id) {
@@ -9881,6 +9991,8 @@ async function hapusPermohonan(id) {
   if (p && p.jurnalId) {
     await KDB.delete('jurnal', p.jurnalId);
   }
+  // Hapus juga jika menggunakan ID deterministik JU-PD-
+  await KDB.delete('jurnal', 'JU-PD-' + id);
   await KDB.delete('permohonan', id);
   navigate('dana-permohonan');
 }
@@ -10009,7 +10121,7 @@ async function buatJurnalDariPermohonan(id) {
   const akunDebit  = p.akunDebit  || '5-2200';
   const akunKredit = detectedBank || p.akunKredit || '1-1101-2';
   var nominal = parseFloat(p.nominal) || 0;
-  const jurnalId = genId('JU');
+  const jurnalId = 'JU-PD-' + p.id;
   await KDB.save('jurnal', jurnalId, {
     id: jurnalId,
     tanggal: p.jatuhTempo || p.tanggal || today(),
@@ -10099,27 +10211,38 @@ function filterDanaMasuk(val) {
   });
 }
 
+var _submittingDanaMasuk = false;
 async function submitDanaMasuk(isDraft) {
+  if (_submittingDanaMasuk) return;
   const nominal = parseNominal(document.getElementById('dm-nominal').value);
   const sumber = document.getElementById('dm-sumber').value.trim();
   if (!isDraft && (!nominal || !sumber)) { showAlert('Sumber dan nominal wajib diisi!', 'danger'); return; }
-  const id = genId('DM');
-  const approvers = await getApprovers();
-  var rawAkunTerima = (document.getElementById('dm-akun-terima') || {}).value;
-  var namaRekVal = (document.getElementById('dm-namarek') || {}).value;
-  var akunList = await getAkun();
-  var detectedBankD = (sumber || namaRekVal)
-    ? findPreferredBankAccountCode(akunList, sumber + ' ' + namaRekVal, rawAkunTerima || '1-1101-2')
-    : null;
-  const akunTerima = detectedBankD || rawAkunTerima || '1-1101-2';
-  const data = { id: id, tipe: 'danamasuk', sumber: sumber, namaPIC: (document.getElementById('dm-pic')||{}).value || KU.nama, noRef: document.getElementById('dm-ref').value, tanggal: document.getElementById('dm-tgl').value || today(), nominal: nominal, tipeTransaksi: document.getElementById('dm-tipe').value, akunTerima: akunTerima, kategori: document.getElementById('dm-akun-kredit').value, namaRekening: document.getElementById('dm-namarek').value, keterangan: document.getElementById('dm-ket').value, buktiDokumen: document.getElementById('dm-bukti').value, status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Dana masuk dicatat dan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
-  await KDB.save('danamasuk', id, data);
-  if (!isDraft) {
-    kirimNotifikasi('📥 Dana Masuk Baru', (sumber||KU.nama) + ' mencatat dana masuk ' + fmtRp(nominal), '');
-    kirimEmailNotifikasi('Dana Masuk Baru', 'Sumber: ' + sumber + '\nNominal: ' + fmtRp(nominal) + '\nKeterangan: ' + data.keterangan + '\nStatus: Pending Layer 1', 'dm_baru');
+  _submittingDanaMasuk = true;
+  showLoading(true);
+  try {
+    const id = genId('DM');
+    const approvers = await getApprovers();
+    var rawAkunTerima = (document.getElementById('dm-akun-terima') || {}).value;
+    var namaRekVal = (document.getElementById('dm-namarek') || {}).value;
+    var akunList = await getAkun();
+    var detectedBankD = (sumber || namaRekVal)
+      ? findPreferredBankAccountCode(akunList, sumber + ' ' + namaRekVal, rawAkunTerima || '1-1101-2')
+      : null;
+    const akunTerima = detectedBankD || rawAkunTerima || '1-1101-2';
+    const data = { id: id, tipe: 'danamasuk', sumber: sumber, namaPIC: (document.getElementById('dm-pic')||{}).value || KU.nama, noRef: document.getElementById('dm-ref').value, tanggal: document.getElementById('dm-tgl').value || today(), nominal: nominal, tipeTransaksi: document.getElementById('dm-tipe').value, akunTerima: akunTerima, kategori: document.getElementById('dm-akun-kredit').value, namaRekening: document.getElementById('dm-namarek').value, keterangan: document.getElementById('dm-ket').value, buktiDokumen: document.getElementById('dm-bukti').value, status: isDraft ? STATUS.DRAFT : STATUS.PENDING_L1, approvalLog: isDraft ? [] : [{ layer: 0, action: 'submit', by: KU.username, nama: KU.nama, at: new Date().toISOString(), catatan: 'Dana masuk dicatat dan diajukan' }], approvers: approvers, createdBy: KU.username, createdAt: new Date().toISOString() };
+    await KDB.save('danamasuk', id, data);
+    if (!isDraft) {
+      kirimNotifikasi('📥 Dana Masuk Baru', (sumber||KU.nama) + ' mencatat dana masuk ' + fmtRp(nominal), '');
+      kirimEmailNotifikasi('Dana Masuk Baru', 'Sumber: ' + sumber + '\nNominal: ' + fmtRp(nominal) + '\nKeterangan: ' + data.keterangan + '\nStatus: Pending Layer 1', 'dm_baru');
+    }
+    showAlert(isDraft ? 'Draft disimpan!' : 'Dana masuk diajukan untuk konfirmasi Layer 1!');
+    navigate('dana-masuk');
+  } catch (err) {
+    showAlert('Gagal mencatat dana masuk: ' + (err.message || err), 'danger');
+  } finally {
+    _submittingDanaMasuk = false;
+    showLoading(false);
   }
-  showAlert(isDraft ? 'Draft disimpan!' : 'Dana masuk diajukan untuk konfirmasi Layer 1!');
-  navigate('dana-masuk');
 }
 
 async function ajukanDanaMasuk(id) {
@@ -10139,6 +10262,8 @@ async function hapusDanaMasuk(id) {
   if (d && d.jurnalId) {
     await KDB.delete('jurnal', d.jurnalId);
   }
+  // Hapus juga jika menggunakan ID deterministik JU-DM-
+  await KDB.delete('jurnal', 'JU-DM-' + id);
   await KDB.delete('danamasuk', id);
   navigate('dana-masuk');
 }
@@ -10251,7 +10376,7 @@ async function buatJurnalDariDanaMasuk(id) {
   const akunKredit = d.kategori && (d.kategori.startsWith('4-') || d.kategori.startsWith('3-') || d.kategori.startsWith('1-'))
     ? d.kategori : '4-2000';
   var nominal = parseFloat(d.nominal) || 0;
-  const jurnalId = genId('JU');
+  const jurnalId = 'JU-DM-' + d.id;
   await KDB.save('jurnal', jurnalId, {
     id: jurnalId,
     tanggal: d.tanggal || today(),

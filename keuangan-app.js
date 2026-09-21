@@ -120,6 +120,7 @@ const MENU = [
     { id: 'admin-users',  label: 'Manajemen User',    icon: '👤', minRole: 'superadmin' },
     { id: 'admin-import', label: 'Import Spreadsheet',icon: '📤', minRole: 'admin' },
     { id: 'admin-export', label: 'Export Data',       icon: '📥', minRole: 'admin' },
+    { id: 'admin-repair', label: '🔧 Fix Data Saldo',  icon: '⚙️', minRole: 'superadmin' },
   ]},
 ];
 
@@ -396,7 +397,7 @@ async function syncLinkedDataJurnalNow() {
     var expectedRef = p.noPOInvoice || p.id || '';
     var expectedAmount = parseFloat(p.nominal) || 0;
     var expectedDebit = p.akunDebit || '5-2200';
-    var expectedKredit = p.akunKredit || '1-1100';
+    var expectedKredit = p.akunKredit || '1-1101-2';
     var lineAkun = (jp.lines || []).map(function(l) { return l.akun; });
     var mismatch = jp.tanggal !== expectedDate
       || (jp.noRef || '') !== expectedRef
@@ -416,7 +417,7 @@ async function syncLinkedDataJurnalNow() {
     var expectedDateDM = dm.tanggal || '';
     var expectedRefDM = dm.noRef || dm.id || '';
     var expectedAmountDM = parseFloat(dm.nominal) || 0;
-    var expectedDebitDM = dm.akunTerima || '1-1100';
+    var expectedDebitDM = dm.akunTerima || '1-1101-2';
     var expectedKreditDM = dm.kategori && (dm.kategori.startsWith('4-') || dm.kategori.startsWith('3-') || dm.kategori.startsWith('1-')) ? dm.kategori : '4-2000';
     var lineAkunDM = (jd.lines || []).map(function(l) { return l.akun; });
     var mismatchDM = jd.tanggal !== expectedDateDM
@@ -432,6 +433,65 @@ async function syncLinkedDataJurnalNow() {
   return { synced: synced, skipped: skipped };
 }
 
+// utility untuk perbaikan data saldo yang ngaco
+async function repairDataSaldoNgaco() {
+  if (!confirm('Peringatan: Fungsi ini akan menghapus duplikat jurnal dan memindahkan transaksi BNI ke Mandiri. Lanjutkan?')) return;
+
+  showLoading(true);
+  const jurnal = await KDB.getAll('jurnal');
+  let countBNI = 0, countDup = 0, countSaldoAwal = 0;
+
+  // 1. Bersihkan Duplikat Jurnal (berdasarkan meta ID)
+  const seenPD = {}, seenDM = {};
+  for (let j of jurnal) {
+    if (j.meta && j.meta.permohonanId) {
+      if (seenPD[j.meta.permohonanId]) {
+        await KDB.delete('jurnal', j.id);
+        countDup++;
+        continue; // skip other checks for this deleted item
+      } else {
+        seenPD[j.meta.permohonanId] = j.id;
+      }
+    }
+    if (j.meta && j.meta.danaMasukId) {
+      if (seenDM[j.meta.danaMasukId]) {
+        await KDB.delete('jurnal', j.id);
+        countDup++;
+        continue;
+      } else {
+        seenDM[j.meta.danaMasukId] = j.id;
+      }
+    }
+
+    // 2. Hapus Jurnal Saldo Awal Duplikat (Jan 5)
+    if (j.tanggal === '2026-01-05' && j.keterangan && (j.keterangan.toLowerCase().includes('saldo awal') || j.keterangan.toLowerCase().includes('opening balance'))) {
+      await KDB.delete('jurnal', j.id);
+      countSaldoAwal++;
+      continue;
+    }
+
+    // 3. Pindahkan BNI (1-1101-1) ke Mandiri (1-1101-2)
+    let changed = false;
+    if (j.lines) {
+      j.lines.forEach(l => {
+        if (l.akun === '1-1101-1') {
+          l.akun = '1-1101-2';
+          l.ket = (l.ket || '') + ' (Migrasi BNI)';
+          changed = true;
+          countBNI++;
+        }
+      });
+    }
+    if (changed) {
+      await KDB.save('jurnal', j.id, j);
+    }
+  }
+
+  showLoading(false);
+  showAlert('Perbaikan Selesai:\n• BNI dipindah: ' + countBNI + '\n• Duplikat dihapus: ' + countDup + '\n• Saldo awal dibersihkan: ' + countSaldoAwal, 'success');
+  if (typeof currentSection !== 'undefined') renderSection(currentSection);
+}
+
 function findPreferredBankAccountCode(akunList, bankName, fallbackKode) {
   var fallback = fallbackKode || '1-1101-2';
   var lower = normalizeCompareText(bankName);
@@ -443,10 +503,9 @@ function findPreferredBankAccountCode(akunList, bankName, fallbackKode) {
     return found ? found.kode : defaultKode;
   }
   if (lower.includes('bca')) return findByName('bca', fallback);
-  if (lower.includes('bni')) return findByName('bni', '1-1101-1');
   if (lower.includes('bri')) return findByName('bri', '1-1101-5');
   if (lower.includes('seabank') || lower.includes('shopee')) return findByName('seabank', '1-1101-4');
-  if (lower.includes('mandiri')) return findByName('mandiri', '1-1101-2');
+  if (lower.includes('mandiri') || lower.includes('bni')) return findByName('mandiri', '1-1101-2');
   return fallback;
 }
 
@@ -1485,6 +1544,7 @@ async function renderSection(id) {
       case 'admin-users':         el.innerHTML = await renderAdminUsers(); break;
       case 'admin-import':        el.innerHTML = renderImport(); loadSavedApiKey(); break;
       case 'admin-export':        el.innerHTML = await renderExport(); break;
+      case 'admin-repair':        el.innerHTML = await renderAdminRepair(); break;
       case 'dana-permohonan':     el.innerHTML = await renderPermohonanDana(); snapshotProtectedSectionState('dana-permohonan'); break;
       case 'dana-masuk':          el.innerHTML = await renderDanaMasuk(); snapshotProtectedSectionState('dana-masuk'); break;
       case 'dana-approval':       el.innerHTML = await renderApprovalCenter(); break;
@@ -8265,16 +8325,17 @@ async function getAkunPettyCash() {
 // Helper: cari kode akun kas/bank utama dari COA
 async function getAkunKasBank() {
   var akun = await getAkun();
-  // Cari akun kas/bank utama (bukan petty cash)
+  // Prefer Mandiri (1-1101-2) if available
+  var mandiri = akun.find(function(a) { return a.kode === '1-1101-2'; });
+  if (mandiri) return mandiri.kode;
+  // Cari akun kas/bank utama lainnya (bukan petty cash)
   var found = akun.find(function(a) {
     var n = (a.nama||'').toLowerCase();
     return (n.includes('bank') || n.includes('kas')) && !n.includes('petty') && !n.includes('kecil') && a.kategori === 'Aset Lancar';
   });
   if (found) return found.kode;
   // Fallback
-  found = akun.find(function(a) { return a.kode === '1-1100' || a.kode === '1-1101-1'; });
-  if (found) return found.kode;
-  return '1-1100';
+  return '1-1101-2';
 }
 
 function buildPettyCashPeriodReport(allTx) {
@@ -18831,4 +18892,21 @@ async function renderIMSLiveDashboard() {
     + '<a href="https://hr-legal-app.netlify.app" target="_blank" rel="noopener" class="btn btn-outline">🔗 Buka Aplikasi IMS</a>'
     + '<button class="btn btn-outline" onclick="navigate(\'ims-live-dashboard\')">🔄 Refresh Dashboard</button>'
     + '</div>';
+}
+
+async function renderAdminRepair() {
+  return renderPageHeader('⚙️ Perbaikan Data Saldo')
+    + '<div class="card">'
+    + '<div class="card-header"><h2>Alat Perbaikan Otomatis</h2></div>'
+    + '<div class="card-body" style="padding:20px">'
+    + '<p style="margin-bottom:15px">Gunakan alat ini jika saldo di Dashboard terlihat tidak wajar (misal: negatif besar atau BNI muncul padahal harusnya kosong).</p>'
+    + '<div style="background:#fff4e5; border-left:5px solid #ffa000; padding:15px; border-radius:8px; margin-bottom:20px">'
+    + '<h3 style="color:#e65100; margin-bottom:8px">Apa yang dilakukan alat ini?</h3>'
+    + '<ul style="margin-left:20px; font-size:0.9rem; line-height:1.6">'
+    + '<li><b>Migrasi BNI:</b> Memindahkan semua transaksi dari akun BNI (1-1101-1) ke Mandiri (1-1101-2).</li>'
+    + '<li><b>Hapus Duplikat Jurnal:</b> Menghapus entri jurnal ganda yang memiliki ID Permohonan/Dana Masuk yang sama.</li>'
+    + '<li><b>Fix Saldo Awal Duplikat:</b> Menghapus jurnal "Saldo Awal" manual (Jan 5) jika sudah ada di setting sistem.</li>'
+    + '</ul></div>'
+    + '<button class="btn btn-danger" style="padding:12px 24px; font-weight:700" onclick="repairDataSaldoNgaco()">🚀 MULAI PERBAIKAN DATA SEKARANG</button>'
+    + '</div></div>';
 }

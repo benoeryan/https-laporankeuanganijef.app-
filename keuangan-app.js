@@ -1968,14 +1968,20 @@ async function renderDashboard() {
     var sCls = Math.abs(selisih) < 1 ? 'text-green' : 'text-red';
     var actualText = actual > 0 ? fmtRp(actual) : 'Set Aktual';
 
-    selisihInfo = '<div style="font-size:0.7rem;margin-top:4px;border-top:1px dashed #ddd;padding-top:4px;cursor:pointer" onclick="promptSetActualBalance(\'' + a.kode + '\', \'' + a.nama.replace(/'/g, "\\'") + '\')">'
-      + '<span style="color:#64748b">Aktual:</span> <b style="color:#334155">' + actualText + '</b>'
-      + (actual > 0 ? '<br><span style="color:#64748b">Selisih:</span> <b class="' + sCls + '">' + fmtRp(selisih) + '</b>' : '')
+    selisihInfo = '<div style="font-size:0.7rem;margin-top:4px;border-top:1px dashed #ddd;padding-top:4px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center">'
+      + '<span><span style="color:#64748b">Aktual:</span> <b style="color:#334155;cursor:pointer" onclick="promptSetActualBalance(\'' + a.kode + '\', \'' + a.nama.replace(/'/g, "\\'") + '\')">' + actualText + '</b></span>'
+      + (actual > 0 && Math.abs(selisih) >= 0.01 ? '<button class="btn btn-xs btn-outline" style="font-size:0.6rem;padding:1px 5px" onclick="koreksiSaldoBankDashboard(\'' + a.kode + '\', \'' + a.nama.replace(/'/g, "\\'") + '\', ' + selisih + ')">🔧 KOREKSI</button>' : '')
+      + '</div>'
+      + (actual > 0 ? '<span style="color:#64748b">Selisih:</span> <b class="' + sCls + '">' + fmtRp(selisih) + '</b>' : '')
       + '</div>';
 
-    return '<div class="stat-box" style="background:' + bg + ';border-radius:16px;padding:22px;border-left:6px solid ' + border + ';box-shadow:0 10px 15px -3px rgba(0,0,0,0.05);min-height:120px;cursor:pointer" onclick="navigate(\'monitor-buku-besar\')">'
+    return '<div class="stat-box" style="background:' + bg + ';border-radius:16px;padding:22px;border-left:6px solid ' + border + ';box-shadow:0 10px 15px -3px rgba(0,0,0,0.05);min-height:120px;position:relative;cursor:default">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start">'
       + '<div style="font-size:0.8rem;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">' + a.nama + '</div>'
-      + '<div class="fw-bold ' + cls + '" style="font-size:1.65rem;margin-top:8px;word-break:break-word;line-height:1.1;letter-spacing:-0.02em">' + fmtRp(Math.abs(net)) + '</div>'
+      + '<a href="#" style="font-size:0.68rem;color:#1a237e;text-decoration:none;font-weight:600" onclick="cekDuplikatTransaksiAkun(\'' + a.kode + '\')">🔍 Periksa Duplikat</a>'
+      + '</div>'
+      + '<div class="fw-bold ' + cls + '" style="font-size:1.65rem;margin-top:8px;word-break:break-word;line-height:1.1;letter-spacing:-0.02em;cursor:pointer" onclick="navigate(\'monitor-buku-besar\')">' + fmtRp(Math.abs(net)) + '</div>'
       + selisihInfo
       + '</div>';
   }).join('')
@@ -1985,9 +1991,14 @@ async function renderDashboard() {
     + '<div class="stat-box green" style="padding:22px;border-left-width:6px;border-radius:16px;box-shadow:0 10px 15px -3px rgba(0,0,0,0.05);min-height:120px;cursor:pointer" onclick="navigate(\'jurnal-umum\')">'
     + '<div style="font-size:0.8rem;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.05em">Pendapatan Hari Ini</div>'
     + '<div class="fw-bold text-green" style="font-size:1.65rem;margin-top:8px;word-break:break-word;line-height:1.1;letter-spacing:-0.02em">' + fmtRp(pendapatanHariIni) + '</div></div>';
+
   const totalKasBank = kasAkun.reduce(function(s,a){
-    if ((a.nama||'').toLowerCase().includes('petty') || a.kode === '1-1101-3') return s + pcSaldoReal;
-    return s + (((saldo[a.kode]||{}).net)||0);
+    var val = 0;
+    if ((a.nama||'').toLowerCase().includes('petty') || a.kode === '1-1101-3') val = pcSaldoReal;
+    else val = ((saldo[a.kode]||{}).net)||0;
+    // Skip if it's the main cash account with huge negative (offset account)
+    if (a.kode === '1-1100' && val < -1000000) return s;
+    return s + val;
   }, 0);
 
   // Compute total pendapatan and pengeluaran for primary KPI
@@ -18909,4 +18920,52 @@ async function renderAdminRepair() {
     + '</ul></div>'
     + '<button class="btn btn-danger" style="padding:12px 24px; font-weight:700" onclick="repairDataSaldoNgaco()">🚀 MULAI PERBAIKAN DATA SEKARANG</button>'
     + '</div></div>';
+}
+
+async function koreksiSaldoBankDashboard(kode, nama, selisih) {
+  if (Math.abs(selisih) < 0.01) return;
+  const abs = Math.abs(selisih);
+  if (!confirm('Buat jurnal penyesuaian otomatis untuk menyamakan saldo ' + nama + ' dengan nilai AKTUAL?\n\nNominal Koreksi: ' + fmtRp(abs))) return;
+
+  showLoading(true);
+  try {
+    const jurnalId = genId('JU');
+    const isDebit = selisih < 0; // if system < actual (negative selisih), we need to debit bank
+
+    const lines = isDebit
+      ? [{ akun: kode, ket: 'Penyesuaian saldo ' + nama + ' ke aktual', debit: abs, kredit: 0 },
+         { akun: '4-2000', ket: 'Pendapatan Lain-lain (Koreksi Saldo)', debit: 0, kredit: abs }]
+      : [{ akun: '5-2900', ket: 'Beban Lain-lain (Koreksi Saldo)', debit: abs, kredit: 0 },
+         { akun: kode, ket: 'Penyesuaian saldo ' + nama + ' ke aktual', debit: 0, kredit: abs }];
+
+    await KDB.save('jurnal', jurnalId, {
+      id: jurnalId,
+      tanggal: today(),
+      keterangan: 'Koreksi saldo ' + nama + ' ke aktual',
+      tipe: 'umum',
+      lines: lines,
+      totalDebit: abs, totalKredit: abs,
+      createdBy: 'system-fix',
+      createdAt: new Date().toISOString()
+    });
+
+    showAlert('Jurnal koreksi berhasil dibuat!', 'success');
+    if (typeof currentSection !== 'undefined') renderSection(currentSection);
+  } catch(e) {
+    showAlert('Gagal membuat jurnal koreksi: ' + e.message, 'danger');
+  }
+  showLoading(false);
+}
+
+async function cekDuplikatTransaksiAkun(kode) {
+  // Buka menu Bank Reconcile untuk akun tersebut
+  navigate('kalk-bank-rec');
+  // Wait a bit for render then set filter if possible, or just notify user
+  setTimeout(() => {
+    const sel = document.getElementById('bankrec-akun-select');
+    if (sel) {
+      sel.value = kode;
+      sel.dispatchEvent(new Event('change'));
+    }
+  }, 500);
 }

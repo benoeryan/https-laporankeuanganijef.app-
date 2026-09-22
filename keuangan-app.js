@@ -435,20 +435,21 @@ async function syncLinkedDataJurnalNow() {
 
 // utility untuk perbaikan data saldo yang ngaco
 async function repairDataSaldoNgaco() {
-  if (!confirm('Peringatan: Fungsi ini akan menghapus duplikat jurnal dan memindahkan transaksi BNI ke Mandiri. Lanjutkan?')) return;
+  if (!confirm('Peringatan: Fungsi ini akan menghapus duplikat jurnal, memindahkan transaksi BNI ke Mandiri, dan menyinkronkan saldo. Lanjutkan?')) return;
 
   showLoading(true);
   const jurnal = await KDB.getAll('jurnal');
-  let countBNI = 0, countDup = 0, countSaldoAwal = 0;
+  let countBNI = 0, countDup = 0, countSaldoAwal = 0, countSigDup = 0;
 
-  // 1. Bersihkan Duplikat Jurnal (berdasarkan meta ID)
-  const seenPD = {}, seenDM = {};
+  // 1. Bersihkan Duplikat Jurnal (berdasarkan meta ID dan Signature)
+  const seenPD = {}, seenDM = {}, seenSig = {};
   for (let j of jurnal) {
+    // A. Check by meta ID (Permohonan/Dana Masuk)
     if (j.meta && j.meta.permohonanId) {
       if (seenPD[j.meta.permohonanId]) {
         await KDB.delete('jurnal', j.id);
         countDup++;
-        continue; // skip other checks for this deleted item
+        continue;
       } else {
         seenPD[j.meta.permohonanId] = j.id;
       }
@@ -460,6 +461,18 @@ async function repairDataSaldoNgaco() {
         continue;
       } else {
         seenDM[j.meta.danaMasukId] = j.id;
+      }
+    }
+
+    // B. Check by Signature (Manual duplicates: Same date, same amount, same description)
+    var sig = getJurnalDuplicateKey(j);
+    if (sig) {
+      if (seenSig[sig]) {
+        await KDB.delete('jurnal', j.id);
+        countSigDup++;
+        continue;
+      } else {
+        seenSig[sig] = j.id;
       }
     }
 
@@ -488,7 +501,7 @@ async function repairDataSaldoNgaco() {
   }
 
   showLoading(false);
-  showAlert('Perbaikan Selesai:\n• BNI dipindah: ' + countBNI + '\n• Duplikat dihapus: ' + countDup + '\n• Saldo awal dibersihkan: ' + countSaldoAwal, 'success');
+  showAlert('Perbaikan Selesai:\n• BNI dipindah: ' + countBNI + '\n• Duplikat ID dihapus: ' + countDup + '\n• Duplikat Signature dihapus: ' + countSigDup + '\n• Saldo awal dibersihkan: ' + countSaldoAwal, 'success');
   if (typeof currentSection !== 'undefined') renderSection(currentSection);
 }
 
